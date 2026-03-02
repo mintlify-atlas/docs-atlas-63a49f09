@@ -1,0 +1,127 @@
+{
+  "projectType": "saas",
+  "projectName": "Nook Browser",
+  "projectDescription": "A fast, minimal browser with sidebar-first design for macOS",
+  "theme": "palm",
+  "primaryColor": "#6366F1",
+  "lightColor": "#818CF8",
+  "darkColor": "#4F46E5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/sidebar-navigation",
+              "features/tabs-and-spaces",
+              "features/command-palette",
+              "features/profiles",
+              "features/split-view"
+            ]
+          },
+          {
+            "group": "Customization",
+            "pages": [
+              "customization/settings",
+              "customization/keyboard-shortcuts",
+              "customization/themes-and-colors"
+            ]
+          },
+          {
+            "group": "Privacy & Security",
+            "pages": [
+              "privacy/incognito-mode",
+              "privacy/cookie-management",
+              "privacy/tracking-protection"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Extensions",
+        "groups": [
+          {
+            "group": "Using Extensions",
+            "pages": [
+              "extensions/overview",
+              "extensions/installing",
+              "extensions/managing",
+              "extensions/permissions"
+            ]
+          },
+          {
+            "group": "Developer Guide",
+            "pages": [
+              "extensions/development/getting-started",
+              "extensions/development/manifest",
+              "extensions/development/api-reference",
+              "extensions/development/debugging"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Developer",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "developer/contributing",
+              "developer/building-from-source",
+              "developer/development-setup"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "developer/architecture/overview",
+              "developer/architecture/managers",
+              "developer/architecture/models",
+              "developer/architecture/state-management",
+              "developer/architecture/webview-coordination"
+            ]
+          },
+          {
+            "group": "Systems",
+            "pages": [
+              "developer/systems/tab-manager",
+              "developer/systems/profile-manager",
+              "developer/systems/extension-system",
+              "developer/systems/window-registry"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Sidebar-first vertical tab navigation",
+    "Workspaces and tab organization with Spaces",
+    "Multi-profile browsing with data isolation",
+    "WebKit extension support (Safari extensions)",
+    "Command palette for quick actions",
+    "Split-screen tab viewing",
+    "Incognito/ephemeral profiles",
+    "Native macOS integration with SwiftUI"
+  ],
+  "publicApiSurface": [
+    "WKWebExtension API (browser.tabs, browser.windows, browser.runtime)",
+    "Native messaging protocol for extensions",
+    "Profile management API",
+    "Tab and Space organization",
+    "WebView coordination for multi-window display",
+    "Settings and preferences management",
+    "History and download management",
+    "Cookie and cache management"
+  ]
+}
