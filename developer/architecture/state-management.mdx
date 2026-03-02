@@ -1,0 +1,608 @@
+---
+title: State management
+description: Observable patterns, SwiftData persistence, and MainActor confinement in Nook
+---
+
+Nook uses a hybrid approach to state management, combining **Swift Observation** (`@Observable`), **Combine** (`@Published`), and **SwiftData** for persistence.
+
+## Observation patterns
+
+### Swift Observation (@Observable)
+
+**Modern approach** introduced in Swift 5.9. Used by:
+- `Space` (`Space.swift:16`)
+- `Profile` (`Profile.swift:16`)
+- `BrowserWindowState` (`BrowserWindowState.swift:15`)
+- `WebViewCoordinator` (`WebViewCoordinator.swift:14`)
+- `WindowRegistry` (`WindowRegistry.swift:14`)
+
+**Advantages**:
+- Automatic property tracking (no manual `@Published` annotations)
+- Better performance (tracks only accessed properties)
+- Cleaner syntax
+- Type-safe key paths
+
+**Example**:
+```swift
+@MainActor
+@Observable
+class Profile {
+    var name: String         // Automatically tracked
+    var icon: String         // Automatically tracked
+    
+    @ObservationIgnored
+    private var cache: [String: Data] = [:]  // Explicitly excluded
+}
+```
+
+**SwiftUI usage**:
+```swift
+struct ProfileView: View {
+    @Environment(Profile.self) private var profile
+    // or
+    @Bindable var profile: Profile
+    
+    var body: some View {
+        Text(profile.name)  // Auto-updates when name changes
+    }
+}
+```
+
+### Combine (@Published)
+
+**Legacy approach** from SwiftUI 1.0. Used by:
+- `BrowserManager` (`BrowserManager.swift:18`) — Pure `ObservableObject`
+- `Tab` (`Tab.swift:18`) — Hybrid `@Observable` + `ObservableObject`
+- `ExtensionManager` — Pure `ObservableObject`
+
+**Example**:
+```swift
+@MainActor
+final class BrowserManager: ObservableObject {
+    @Published var currentTab: Tab?
+    @Published var spaces: [Space] = []
+    @Published var showTabClosureToast: Bool = false
+}
+```
+
+**SwiftUI usage**:
+```swift
+struct BrowserView: View {
+    @EnvironmentObject var browserManager: BrowserManager
+    // or
+    @ObservedObject var browserManager: BrowserManager
+    
+    var body: some View {
+        Text(browserManager.currentTab?.name ?? "")
+    }
+}
+```
+
+### Hybrid pattern (Tab model)
+
+`Tab` uses **both** patterns for backward compatibility (`Tab.swift:18`):
+
+```swift
+@MainActor
+public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
+    // Observable properties (Swift Observation)
+    var url: URL
+    var name: String
+    var favicon: Image
+    var loadingState: LoadingState
+    
+    // Published properties (Combine)
+    @Published var canGoBack: Bool = false
+    @Published var canGoForward: Bool = false
+    @Published var hasPlayingAudio: Bool = false
+    @Published var hasPlayingVideo: Bool = false
+}
+```
+
+**Why hybrid?**
+- Some views use `@ObservedObject var tab: Tab` (Combine)
+- Other views observe `tab.url` directly (Swift Observation)
+- Gradual migration strategy to avoid breaking changes
+
+<Note>
+  The hybrid pattern is a **migration strategy**. New code should use pure `@Observable`.
+</Note>
+
+## MainActor confinement
+
+All state management in Nook is `@MainActor` confined for thread safety.
+
+### Why MainActor?
+
+1. **SwiftUI requirement**: Views must update on the main thread
+2. **Data race prevention**: Swift 6 strict concurrency requires actor isolation
+3. **WebKit integration**: `WKWebView` APIs are main-thread only
+
+### Pattern
+
+Every manager and model is annotated:
+
+```swift
+@MainActor
+@Observable
+class Space { ... }
+
+@MainActor
+final class TabManager { ... }
+
+@MainActor
+class BrowserManager: ObservableObject { ... }
+```
+
+### Calling from background threads
+
+If you need to update state from a background thread, use `MainActor.run`:
+
+```swift
+Task.detached {
+    let data = await fetchData()
+    await MainActor.run {
+        self.processedData = data
+    }
+}
+```
+
+Or mark the entire task as `@MainActor`:
+
+```swift
+Task { @MainActor in
+    self.processedData = await fetchData()
+}
+```
+
+## SwiftData persistence
+
+### Schema
+
+Nook's persistence schema is defined in `BrowserManager.swift:29-37`:
+
+```swift
+static let schema = Schema([
+    SpaceEntity.self,
+    ProfileEntity.self,
+    TabEntity.self,
+    FolderEntity.self,
+    TabsStateEntity.self,
+    HistoryEntity.self,
+    ExtensionEntity.self,
+])
+```
+
+### Container initialization
+
+```swift
+// BrowserManager.swift:70-74
+private init() {
+    let config = ModelConfiguration(url: Self.storeURL)
+    container = try ModelContainer(for: Self.schema, configurations: [config])
+}
+```
+
+**Store location**: `~/Library/Application Support/Nook/default.store`
+
+### Atomic persistence with PersistenceActor
+
+`TabManager` uses a **Swift actor** for thread-safe, coalesced writes (`TabManager.swift:12`):
+
+```swift
+actor PersistenceActor {
+    private let container: ModelContainer
+    private var latestGeneration: Int = 0
+    private var lastBackupJSON: Data?
+    
+    func persist(snapshot: Snapshot, generation: Int) async -> Bool {
+        // Coalesce stale writes
+        if generation < self.latestGeneration {
+            return false
+        }
+        self.latestGeneration = generation
+        
+        do {
+            // Create JSON backup
+            try createDataSnapshot(snapshot)
+            // Perform atomic write
+            try await performAtomicPersistence(snapshot)
+            return true
+        } catch {
+            // Fallback to best-effort save
+            try await performBestEffortPersistence(snapshot)
+            return false
+        }
+    }
+}
+```
+
+**Key features**:
+1. **Coalescing**: Ignores stale snapshots (generation counter)
+2. **Atomic transactions**: Uses child `ModelContext` for rollback support
+3. **Backup/recovery**: Creates JSON snapshot before each write
+4. **Best-effort fallback**: Attempts partial save on atomic failure
+
+### Atomic transaction pattern
+
+```swift
+private func performAtomicPersistence(_ snapshot: Snapshot) async throws {
+    let ctx = ModelContext(container)
+    ctx.autosaveEnabled = false  // Manual save for atomicity
+    
+    // Validate inputs
+    try validateInput(snapshot)
+    
+    // Delete orphaned entities
+    let all = try ctx.fetch(FetchDescriptor<TabEntity>())
+    let keepIDs = Set(snapshot.tabs.map { $0.id })
+    for entity in all where !keepIDs.contains(entity.id) {
+        ctx.delete(entity)
+    }
+    
+    // Upsert tabs
+    for tab in snapshot.tabs {
+        try upsertTab(in: ctx, tab)
+    }
+    
+    // Save atomically
+    try ctx.save()
+}
+```
+
+### Snapshot pattern
+
+**Problem**: Can't pass `@Observable` models directly to actors (actor isolation errors).
+
+**Solution**: Convert to lightweight `Codable` snapshots (`TabManager.swift:33-82`):
+
+```swift
+struct SnapshotTab: Codable {
+    let id: UUID
+    let urlString: String
+    let name: String
+    let index: Int
+    let spaceId: UUID?
+    let isPinned: Bool
+    // ... all persistent properties
+}
+
+struct Snapshot: Codable {
+    let spaces: [SnapshotSpace]
+    let tabs: [SnapshotTab]
+    let folders: [SnapshotFolder]
+    let state: SnapshotState
+}
+```
+
+**Conversion flow**:
+```swift
+// TabManager (MainActor) creates snapshot
+func persistSession() {
+    let snapshot = Snapshot(
+        spaces: spaces.map { /* convert to SnapshotSpace */ },
+        tabs: tabs.map { /* convert to SnapshotTab */ },
+        folders: folders.map { /* convert to SnapshotFolder */ },
+        state: SnapshotState(currentTabID: currentTabId, ...)
+    )
+    
+    // Send to actor
+    Task {
+        await persistenceActor.persist(snapshot: snapshot, generation: generation)
+    }
+}
+```
+
+### Restoration pattern
+
+```swift
+func loadTabs() {
+    do {
+        let entities = try context.fetch(
+            FetchDescriptor<TabEntity>(sortBy: [SortDescriptor(\.index)])
+        )
+        
+        self.tabs = entities.compactMap { entity in
+            // Validate entity data
+            guard let url = URL(string: entity.urlString) else {
+                print("⚠️ Skipping invalid tab: \(entity.id)")
+                return nil
+            }
+            
+            // Convert entity → observable model
+            let tab = Tab(
+                id: entity.id,
+                url: url,
+                name: entity.name,
+                index: entity.index,
+                spaceId: entity.spaceId
+            )
+            tab.isPinned = entity.isPinned
+            tab.isSpacePinned = entity.isSpacePinned
+            tab.folderId = entity.folderId
+            
+            // Restore navigation state
+            tab.restoredCanGoBack = entity.canGoBack
+            tab.restoredCanGoForward = entity.canGoForward
+            
+            return tab
+        }
+    } catch {
+        print("❌ Failed to load tabs: \(error)")
+        self.tabs = []
+    }
+}
+```
+
+## Profile data isolation
+
+Each `Profile` owns a unique `WKWebsiteDataStore` for complete data separation (`Profile.swift:82-98`):
+
+```swift
+private static func createDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+    if #available(macOS 15.4, *) {
+        let store = WKWebsiteDataStore(forIdentifier: profileId)
+        if !store.isPersistent {
+            print("⚠️ Data store is not persistent")
+        }
+        return store
+    } else {
+        // Fallback: shared store on older macOS
+        return WKWebsiteDataStore.default()
+    }
+}
+```
+
+**Isolated data**:
+- Cookies
+- localStorage / sessionStorage
+- IndexedDB
+- Service workers
+- Cache
+
+**Persistent location**: `~/Library/WebKit/Nook/{profileId}/`
+
+### Ephemeral profiles
+
+Incognito mode uses **non-persistent** data stores (`Profile.swift:66-76`):
+
+```swift
+static func createEphemeral() -> Profile {
+    let profile = Profile(
+        id: UUID(),
+        name: "Incognito",
+        icon: "eye.slash",
+        dataStore: .nonPersistent()  // In-memory only
+    )
+    profile.isEphemeral = true
+    return profile
+}
+```
+
+**Behavior**:
+- All data discarded when window closes
+- No cookies, history, or cache persisted
+- Each incognito window gets a separate ephemeral profile
+
+## State synchronization patterns
+
+### Window-specific state
+
+`BrowserWindowState` tracks per-window selections (`BrowserWindowState.swift:15`):
+
+```swift
+@MainActor
+@Observable
+class BrowserWindowState {
+    var currentTabId: UUID?
+    var currentSpaceId: UUID?
+    var currentProfileId: UUID?
+    
+    // Active tab per space (spaceId → tabId)
+    var activeTabForSpace: [UUID: UUID] = [:]
+}
+```
+
+**Pattern**: Same tab/space can be active in one window but not another.
+
+### Global state
+
+`TabManager` owns the single source of truth for all tabs:
+
+```swift
+@MainActor
+final class TabManager {
+    var tabs: [Tab] = []
+    var spaces: [Space] = []
+    var currentSpace: Space?
+}
+```
+
+**Pattern**: All windows share the same tab instances but maintain independent selections.
+
+### Synchronization flow
+
+```swift
+// User switches tab in Window A
+windowStateA.currentTabId = newTabId
+
+// BrowserManager syncs to TabManager
+browserManager.setCurrentTab(for: windowStateA, tabId: newTabId)
+
+// Window B unaffected
+windowStateB.currentTabId  // Still shows previous tab
+```
+
+## Observation best practices
+
+<Note>
+  **Prefer @Observable for new code**
+  
+  Swift Observation is more efficient and has better compiler support. Only use `@Published` when maintaining legacy code.
+</Note>
+
+<Note>
+  **Use @ObservationIgnored for computed properties**
+  
+  If a property is derived from other state, exclude it from tracking:
+  
+  ```swift
+  @Observable class Tab {
+      var url: URL
+      
+      @ObservationIgnored
+      var domain: String { url.host ?? "" }
+  }
+  ```
+</Note>
+
+<Note>
+  **Batch updates when possible**
+  
+  Multiple property changes trigger multiple view updates. Batch them:
+  
+  ```swift
+  // Bad: 3 separate updates
+  tab.url = newURL
+  tab.name = newName
+  tab.favicon = newFavicon
+  
+  // Good: 1 batched update
+  withObservationTracking {
+      tab.url = newURL
+      tab.name = newName
+      tab.favicon = newFavicon
+  }
+  ```
+</Note>
+
+<Note>
+  **Use snapshots for async operations**
+  
+  Don't pass `@Observable` models to actors. Convert to `Codable` structs first:
+  
+  ```swift
+  struct TabSnapshot: Codable {
+      let id: UUID
+      let url: String
+  }
+  
+  let snapshot = TabSnapshot(id: tab.id, url: tab.url.absoluteString)
+  await actor.process(snapshot)
+  ```
+</Note>
+
+## Persistence best practices
+
+<Note>
+  **Validate on restore**
+  
+  Always handle corrupt/missing data when loading from SwiftData:
+  
+  ```swift
+  let entities = try context.fetch(FetchDescriptor<TabEntity>())
+  self.tabs = entities.compactMap { entity in
+      guard let url = URL(string: entity.urlString) else {
+          return nil  // Skip invalid entity
+      }
+      return Tab(id: entity.id, url: url, ...)
+  }
+  ```
+</Note>
+
+<Note>
+  **Use upsert pattern**
+  
+  Check for existing entities before inserting:
+  
+  ```swift
+  let existing = try ctx.fetch(
+      FetchDescriptor<TabEntity>(predicate: #Predicate { $0.id == tabId })
+  ).first
+  
+  if let entity = existing {
+      entity.urlString = newURL  // Update
+  } else {
+      ctx.insert(TabEntity(...))  // Insert
+  }
+  ```
+</Note>
+
+<Note>
+  **Disable autosave for transactions**
+  
+  For atomic operations, manually control save timing:
+  
+  ```swift
+  let ctx = ModelContext(container)
+  ctx.autosaveEnabled = false
+  
+  // ... make changes ...
+  
+  try ctx.save()  // Explicit atomic save
+  ```
+</Note>
+
+## Migration from Combine to Observation
+
+Nook is gradually migrating from `@Published` to `@Observable`. Here's the pattern:
+
+### Before (Combine)
+
+```swift
+@MainActor
+final class SpaceManager: ObservableObject {
+    @Published var spaces: [Space] = []
+    @Published var currentSpace: Space?
+}
+
+struct SpaceView: View {
+    @EnvironmentObject var spaceManager: SpaceManager
+    
+    var body: some View {
+        Text(spaceManager.currentSpace?.name ?? "")
+    }
+}
+```
+
+### After (Observation)
+
+```swift
+@MainActor
+@Observable
+final class SpaceManager {
+    var spaces: [Space] = []
+    var currentSpace: Space?
+}
+
+struct SpaceView: View {
+    @Environment(SpaceManager.self) private var spaceManager
+    
+    var body: some View {
+        Text(spaceManager.currentSpace?.name ?? "")
+    }
+}
+```
+
+### Environment injection
+
+```swift
+// Before
+ContentView()
+    .environmentObject(spaceManager)
+
+// After
+ContentView()
+    .environment(spaceManager)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Models" icon="database" href="/developer/architecture/models">
+    Explore data models and SwiftData entities
+  </Card>
+  <Card title="WebView coordination" icon="globe" href="/developer/architecture/webview-coordination">
+    Learn about webview lifecycle and BrowserConfig
+  </Card>
+</CardGroup>

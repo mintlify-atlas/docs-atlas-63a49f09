@@ -1,0 +1,156 @@
+---
+title: Development setup
+description: Set up your development environment for Nook Browser
+---
+
+This guide will help you set up your development environment to start contributing to Nook.
+
+## Initial setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/nook-browser/Nook.git
+    cd Nook
+    ```
+  </Step>
+  
+  <Step title="Switch to the dev branch">
+    All development work happens on the `dev` branch:
+    
+    ```bash
+    git checkout dev
+    ```
+  </Step>
+  
+  <Step title="Open in Xcode">
+    ```bash
+    open Nook.xcodeproj
+    ```
+  </Step>
+</Steps>
+
+<Note>
+No Swift Package Manager setup is needed. All dependencies are embedded locally in `Nook/ThirdParty/`.
+</Note>
+
+## Xcode configuration
+
+### Code signing
+
+Before you can build and run Nook, you need to configure code signing:
+
+<Steps>
+  <Step title="Select the Nook target">
+    In Xcode, select the "Nook" target in the project navigator.
+  </Step>
+  
+  <Step title="Configure signing">
+    1. Click on the "Signing & Capabilities" tab
+    2. Under "Team", select your personal Apple Developer account or team
+    3. Xcode will automatically manage your signing certificates
+  </Step>
+</Steps>
+
+### Build scheme
+
+Nook uses a single scheme called "Nook" for both debug and release builds:
+
+- **Debug**: Select "Nook" scheme and press `Cmd + R` to build and run
+- **Release**: Change the build configuration in the scheme editor
+
+## Running locally
+
+<Steps>
+  <Step title="Select your target">
+    In Xcode, select your target device/simulator from the toolbar (Mac is the default).
+  </Step>
+  
+  <Step title="Build and run">
+    Press `Cmd + R` to build and run Nook.
+  </Step>
+</Steps>
+
+<Note>
+The first build may take a few minutes as Xcode compiles all dependencies.
+</Note>
+
+## Testing
+
+Nook includes UI tests in the `NookUITests` target.
+
+### Running tests in Xcode
+
+<Steps>
+  <Step title="Open the Test navigator">
+    Press `Cmd + 6` or click the Test navigator icon in the left sidebar.
+  </Step>
+  
+  <Step title="Run tests">
+    - Click the play button next to "NookUITests" to run all tests
+    - Or click individual test methods to run specific tests
+  </Step>
+</Steps>
+
+### Running tests from command line
+
+```bash
+xcodebuild test -scheme Nook
+```
+
+<Warning>
+Only UI tests are currently available in the `NookUITests` target. Unit tests are planned for future development.
+</Warning>
+
+## Development workflow
+
+### Branch naming
+
+Use descriptive branch names that indicate the type of work:
+
+```bash
+# Features
+git checkout -b feature/add-bookmark-sync
+
+# Bug fixes
+git checkout -b fix/tab-crash-on-close
+
+# Refactoring
+git checkout -b refactor/split-browser-manager
+```
+
+### Git workflow
+
+<Note>
+All pull requests must target the `dev` branch, not `main`. This is enforced by CI.
+</Note>
+
+<Steps>
+  <Step title="Create your feature branch">
+    ```bash
+    git checkout dev
+    git pull origin dev
+    git checkout -b feature/your-feature-name
+    ```
+  </Step>
+  
+  <Step title="Make your changes">
+    Develop your feature or fix, committing changes with clear messages.
+  </Step>
+  
+  <Step title="Push and create PR">
+    ```bash
+    git push origin feature/your-feature-name
+    ```
+    
+    Then open a pull request targeting the `dev` branch on GitHub.
+  </Step>
+</Steps>
+
+## Getting help
+
+If you run into issues setting up your development environment:
+
+- Check the [README](https://github.com/nook-browser/Nook/blob/main/README.md) for additional information
+- Join our [Discord](https://discord.gg/J3XfPvg7Fs) to ask questions and connect with other developers
+- Search existing [GitHub issues](https://github.com/nook-browser/Nook/issues) for similar problems

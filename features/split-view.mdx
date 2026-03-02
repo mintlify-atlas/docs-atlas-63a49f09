@@ -1,0 +1,224 @@
+---
+title: Split view
+description: Browse two tabs side-by-side for comparison and multitasking
+---
+
+Split view lets you view two tabs side-by-side in the same window, perfect for comparing content, referencing documentation while coding, or multitasking across websites.
+
+## Overview
+
+Split view divides your window into two panes, each displaying a different tab:
+
+- **Left pane** - First tab
+- **Right pane** - Second tab
+- **Adjustable divider** - Resize panes by dragging the divider
+- **Independent browsing** - Each pane operates independently
+
+<Tip>
+Split view is window-specific. Each window can have its own split configuration, allowing different split layouts across windows.
+</Tip>
+
+## Entering split view
+
+There are several ways to enter split view:
+
+### Method 1: Drag a tab
+
+<Steps>
+  <Step title="Click and drag a tab">
+    Click on a tab in the sidebar and start dragging it.
+  </Step>
+  
+  <Step title="Drag over the web content area">
+    Move your cursor over the main web content area (not the sidebar).
+  </Step>
+  
+  <Step title="Choose a side">
+    Move to the left or right edge of the window. A preview overlay appears showing the split layout.
+  </Step>
+  
+  <Step title="Drop the tab">
+    Release the mouse to create the split view.
+  </Step>
+</Steps>
+
+The dragged tab is placed on the side where you dropped it, and your current tab occupies the opposite side.
+
+### Method 2: Context menu
+
+1. Right-click a tab in the sidebar
+2. Select **Open in Split View**
+3. Choose **Left** or **Right** for placement
+
+The selected tab and your current tab are arranged in split view.
+
+<Note>
+If you're already in split view, opening another tab in split view replaces the tab on the selected side.
+</Note>
+
+## Adjusting split panes
+
+Resize the split panes to give more space to either side:
+
+1. **Hover over the divider** - The cursor changes to a resize indicator
+2. **Click and drag** - Move the divider left or right
+3. **Release** - The new layout is saved
+
+### Size constraints
+
+- **Minimum fraction** - 20% (0.2) - Neither pane can be smaller than 20% of the window
+- **Maximum fraction** - 80% (0.8) - Neither pane can be larger than 80% of the window
+- **Default fraction** - 50% (0.5) - Panes start at equal size
+
+The divider position is saved per window and persists across sessions.
+
+<Tip>
+Double-click the divider to reset both panes to equal 50/50 size.
+</Tip>
+
+## Active pane
+
+Only one pane is active at a time:
+
+- **Visual indicator** - Active pane has a highlighted border or accent
+- **Keyboard shortcuts** - Apply to the active pane's tab
+- **URL bar** - Shows the active pane's URL
+
+Click anywhere in a pane to make it active.
+
+## Exiting split view
+
+Leave split view and return to single-tab mode:
+
+### Method 1: Close a pane
+
+1. Click the **X** button on a pane's header
+2. The remaining pane expands to fill the window
+
+### Method 2: Select a tab
+
+Click any tab in the sidebar (that's not in the split view) to exit split view and focus that tab.
+
+### Method 3: Keyboard shortcut
+
+Press `Escape` to exit split view and keep the active pane's tab.
+
+<Note>
+Exiting split view doesn't close tabs. Both tabs remain in the sidebar and can be accessed normally.
+</Note>
+
+## Swap sides
+
+Swap the left and right panes:
+
+1. Right-click the divider
+2. Select **Swap Sides**
+
+Alternatively, use the keyboard shortcut `Cmd+Shift+X`.
+
+<Card title="Use case: Swap sides" icon="arrow-right-arrow-left">
+  You're comparing two documents and want to switch which one is on the left for easier reference.
+</Card>
+
+## Common use cases
+
+### Documentation and coding
+
+View API documentation on one side while writing code on the other:
+
+- Left pane: Code editor web app
+- Right pane: Documentation website
+
+### Comparison shopping
+
+Compare products side-by-side:
+
+- Left pane: Product A
+- Right pane: Product B
+
+### Research and writing
+
+Reference source material while writing:
+
+- Left pane: Research article
+- Right pane: Writing app or document
+
+### Video and notes
+
+Watch a video tutorial while taking notes:
+
+- Left pane: Video (YouTube, Vimeo)
+- Right pane: Notes app
+
+<Tip>
+Use picture-in-picture for videos if you need more space for notes. The video floats above the window while you use the full width for notes.
+</Tip>
+
+## Split view with pinned tabs
+
+Pinned tabs (both global and space-pinned) behave specially in split view:
+
+- **Automatic duplication** - If you try to split with a pinned tab, Nook creates a temporary duplicate regular tab
+- **Original preserved** - The pinned tab remains in its original location
+- **Temporary tab** - The duplicate exists only for the split view session
+
+<Note>
+This ensures pinned tabs remain in their designated locations while still allowing you to use them in split view.
+</Note>
+
+## Multi-window split view
+
+Each window maintains its own independent split view state:
+
+- **Window A** - Can have tabs X and Y in split view
+- **Window B** - Can have tabs Z and W in split view
+- **Same tab** - The same tab can appear in split view in multiple windows
+
+Split view state is per-window, not global.
+
+## Tab closure and split view
+
+If you close a tab that's currently in split view:
+
+- **Automatic exit** - Split view exits automatically
+- **Remaining tab** - The other tab becomes the focused single tab
+- **Safe cleanup** - No "zombie" split state remains
+
+<Card title="Keyboard shortcuts" icon="keyboard">
+  - Drag tab to edge - Enter split view
+  - `Escape` - Exit split view (keep active pane)
+  - `Cmd+Shift+X` - Swap split panes
+  - Click pane - Make pane active
+</Card>
+
+## Performance considerations
+
+Split view uses Nook's multi-window WebView system:
+
+- **Independent WebViews** - Each pane gets its own WebView instance
+- **Shared state** - Both WebViews share the same underlying tab data
+- **Memory usage** - Uses more memory than single-tab view
+- **Sync** - Changes in one WebView sync to the tab state
+
+<Tip>
+If you're experiencing performance issues, exit split view to reduce memory usage.
+</Tip>
+
+## Limitations
+
+- **Two panes maximum** - Nook supports only two-pane splits (no 3-way or 4-way splits)
+- **Same space** - Both tabs should be from accessible spaces (pinned or current space)
+- **Window-specific** - Split view doesn't persist across app restarts (reopens in single-tab mode)
+
+## Visual design
+
+Split view features:
+
+- **Smooth divider** - Thin, draggable divider between panes
+- **Pane indicators** - Visual borders showing the active pane
+- **Responsive layout** - Adapts to window resizing
+- **Animations** - Smooth transitions when entering/exiting split view
+
+<Note>
+The divider respects your space's gradient colors and appearance settings.
+</Note>

@@ -1,0 +1,161 @@
+---
+title: Installing extensions
+description: Learn how to install browser extensions in Nook
+---
+
+Nook supports installing extensions from multiple sources and formats. All extensions are stored in `~/Library/Application Support/Nook/Extensions/`.
+
+## Supported formats
+
+You can install extensions in the following formats:
+
+- **ZIP archives** (`.zip`) - Standard Chrome extension packages
+- **Unpacked directories** - Folders containing `manifest.json`
+- **Safari extension bundles** (`.appex`) - Safari Web Extension bundles
+- **Application bundles** (`.app`) - Apps containing Safari Web Extension plugins
+
+## Installation methods
+
+### Install from file
+
+<Steps>
+  <Step title="Open the extension installer">
+    Navigate to Settings → Extensions, then click the install button or use the file picker.
+  </Step>
+  
+  <Step title="Select your extension">
+    Choose a ZIP file, directory, `.appex`, or `.app` bundle containing the extension.
+  </Step>
+  
+  <Step title="Review permissions">
+    Nook displays the permissions the extension requests. Review what the extension can access:
+    
+    - **Site access** - Which websites the extension can read and modify
+    - **Browser permissions** - APIs like tabs, bookmarks, or history
+    - **Native messaging** - Whether it can communicate with native apps
+  </Step>
+  
+  <Step title="Grant permissions">
+    Click "Add Extension" to grant the requested permissions and install the extension.
+    
+    <Note>
+    All manifest `permissions` and `host_permissions` are granted automatically at install time, matching Chrome's behavior. Only `optional_permissions` require runtime approval.
+    </Note>
+  </Step>
+  
+  <Step title="Verify installation">
+    The extension appears in your toolbar (if it has an action button) and in Settings → Extensions.
+  </Step>
+</Steps>
+
+### Install Safari extensions
+
+Nook can discover and install Safari Web Extensions already installed on your Mac:
+
+<Steps>
+  <Step title="Discover available extensions">
+    Nook scans `/Applications` and `~/Applications` for apps containing Safari Web Extension bundles.
+  </Step>
+  
+  <Step title="Select an extension">
+    Choose from the list of discovered Safari extensions in the installer.
+  </Step>
+  
+  <Step title="Install from the app bundle">
+    Nook extracts the web extension resources from the `.appex` bundle inside the app and installs them.
+  </Step>
+</Steps>
+
+<Warning>
+Safari extensions that use native Safari-specific APIs beyond the standard WebExtension APIs may not work correctly in Nook.
+</Warning>
+
+## Installation process
+
+When you install an extension, Nook:
+
+1. **Extracts the extension** to a temporary directory
+2. **Validates the manifest** - Checks for required fields (`name`, `version`, `manifest_version`)
+3. **Generates an extension ID** - Creates a unique identifier for the extension
+4. **Patches for compatibility** - Modifies manifest if needed for WKWebExtension compatibility:
+   - Adds `scripting` permission for MV2 extensions
+   - Injects bridge scripts for `externally_connectable` support
+   - Adds iframe message bridges for specific extensions (e.g., Bitwarden)
+5. **Moves to final location** - Copies files to `~/Library/Application Support/Nook/Extensions/{extension-id}/`
+6. **Loads the extension** - Registers with WKWebExtensionController
+7. **Starts background worker** - Launches the service worker or background page
+8. **Extracts icons** - Finds and stores extension icons (128px, 64px, 48px, 32px, 16px)
+
+## Manifest validation
+
+### Required fields
+
+Nook validates that your `manifest.json` contains:
+
+```json
+{
+  "manifest_version": 2 | 3,
+  "name": "Extension Name",
+  "version": "1.0.0"
+}
+```
+
+### Manifest V3 requirements
+
+For MV3 extensions, Nook validates:
+
+- **Service worker exists** - If `background.service_worker` is specified, the file must exist
+- **Content script worlds** - Validates `world` parameter in content scripts
+- **Host permissions** - Checks `host_permissions` array format
+
+<Note>
+Nook automatically patches manifests to improve WebKit compatibility. For example, domain-specific content scripts may be modified to run in the correct execution world.
+</Note>
+
+## Localization
+
+Extensions using `__MSG_key__` placeholders are automatically localized:
+
+1. Nook looks for `_locales/{locale}/messages.json` files
+2. Matches your system locale (e.g., `en_US`, `pt_BR`, `fr`)
+3. Falls back to `en` if your locale isn't available
+4. Replaces placeholders in extension name and description
+
+## After installation
+
+Once installed, the extension:
+
+- **Appears in the toolbar** (if it declares an `action` or `browser_action`)
+- **Is enabled by default** and starts immediately
+- **Registers content scripts** that will inject into matching pages
+- **Loads its background worker** to handle events and messages
+- **Can be managed** in Settings → Extensions
+
+## Troubleshooting
+
+### Extension won't install
+
+<Accordion title="Invalid manifest error">
+Ensure your `manifest.json` includes `manifest_version`, `name`, and `version` fields. Check that the JSON is valid (no trailing commas, proper quotes).
+</Accordion>
+
+<Accordion title="MV3 service worker not found">
+If you get "MV3 service worker not found", verify that the path in `background.service_worker` points to an existing file in your extension directory.
+</Accordion>
+
+<Accordion title="ZIP extraction failed">
+Ensure the ZIP file is not corrupted and contains a `manifest.json` at the root level (not inside a subdirectory).
+</Accordion>
+
+### Extension installed but not working
+
+<Accordion title="Content scripts not injecting">
+Check that:
+- The extension has the correct `host_permissions` or match patterns
+- You've navigated to a URL matching the content script patterns
+- Content script files exist at the paths specified in manifest
+</Accordion>
+
+<Accordion title="Background worker not starting">
+Check Console logs for JavaScript errors in the service worker. Enable Web Inspector for the extension background page in Settings → Extensions.
+</Accordion>

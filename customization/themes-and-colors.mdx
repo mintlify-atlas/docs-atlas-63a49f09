@@ -1,0 +1,240 @@
+---
+title: Themes and colors
+description: Customize Nook's appearance with space gradients and color options
+---
+
+Nook's visual identity is built around customizable space gradients that give each space a unique look. You can also adjust window materials and interface colors to match your preferences.
+
+## Space gradients
+
+Every space in Nook has its own gradient that appears as the background of the sidebar and UI elements. Gradients are fully customizable with multiple color stops, angles, grain effects, and opacity.
+
+### Anatomy of a gradient
+
+Each gradient consists of:
+
+<ParamField path="Angle" type="number" default="45°">
+  The direction of the gradient (0-360°). Common angles:
+  - **0°** - Top to bottom
+  - **45°** - Diagonal (top-left to bottom-right)
+  - **90°** - Left to right
+  - **180°** - Bottom to top
+</ParamField>
+
+<ParamField path="Nodes" type="array">
+  Color stops along the gradient. Each node has:
+  - **Color** - Hex color value with optional alpha
+  - **Location** - Position along the gradient (0.0 to 1.0)
+  
+  You can add up to 8 color stops for complex gradients.
+</ParamField>
+
+<ParamField path="Grain" type="number" default="0.05">
+  Grain texture overlay (0.0 to 1.0) that adds subtle noise for a less digital look.
+  
+  - **0.0** - No grain
+  - **0.05** - Subtle grain (recommended)
+  - **1.0** - Maximum grain
+</ParamField>
+
+<ParamField path="Opacity" type="number" default="0.6">
+  Overall transparency of the gradient layer (0.0 to 1.0).
+  
+  - **0.0** - Fully transparent
+  - **0.6** - Default (balanced)
+  - **1.0** - Fully opaque
+</ParamField>
+
+### Edit a space gradient
+
+1. Right-click a space in the sidebar
+2. Select **Customize Space Gradient** (or press `Cmd+Shift+G`)
+3. Use the gradient editor to:
+   - Add color nodes by clicking on the gradient bar
+   - Drag nodes to reposition them
+   - Click a node to change its color
+   - Adjust angle, grain, and opacity sliders
+4. Changes are saved automatically
+
+<Tip>The primary color (first node) is used for UI elements like the space tab indicator.</Tip>
+
+### Preset gradients
+
+Nook includes preset gradient styles:
+
+<Accordion title="Default gradient">
+  A simple black gradient with subtle grain:
+  - **Angle**: 45°
+  - **Colors**: `#000000` → `#000000`
+  - **Grain**: 0.05
+  - **Opacity**: 0.6
+  
+  This creates a clean, minimal background that works with any theme.
+</Accordion>
+
+<Accordion title="Incognito gradient">
+  A dark, high-contrast gradient for private browsing:
+  - **Angle**: 180°
+  - **Colors**: `#1C1C1E` → `#2C2C2E`
+  - **Grain**: 0.0
+  - **Opacity**: 1.0
+  
+  Used automatically for incognito/ephemeral profiles.
+</Accordion>
+
+### Color perception
+
+Nook automatically detects whether your gradient is light or dark and adjusts text and icon colors accordingly:
+
+- **Dark gradients** (brightness < 0.6) - Use light text/icons
+- **Light gradients** (brightness ≥ 0.6) - Use dark text/icons
+
+The perceived brightness calculation accounts for alpha transparency, ensuring readable text in all scenarios.
+
+## UI color system
+
+Nook uses a semantic color system that adapts to both light and dark gradients.
+
+### Space-specific colors
+
+**For light gradients** (dark theme):
+- Space tab active: White 20% opacity
+- Space tab hover: White 10% opacity
+- Space tab text: `#EAE6DC`
+- Icons active: White 60% opacity
+- Icons disabled: White 25% opacity
+
+**For dark gradients** (light theme):
+- Space tab active: White (solid)
+- Space tab hover: Black 5% opacity
+- Space tab text: `#001E21`
+- Icons active: Black 55% opacity
+- Icons disabled: Black 15% opacity
+
+### Pinned tabs (Favorites)
+
+Pinned tab colors also adapt to the gradient:
+
+**For light gradients**:
+- Active: White 20% opacity
+- Hover: White 15% opacity
+- Idle: White 10% opacity
+
+**For dark gradients**:
+- Active: White (solid)
+- Hover: Black 10% opacity
+- Idle: Black 5% opacity
+
+### Sidebar text
+
+- **Light gradients**: White 50% opacity
+- **Dark gradients**: Black 50% opacity
+
+## Window materials
+
+MacOS provides several visual effect materials that control the window background blur and translucency. Access these in **Settings > Appearance > Background Material**.
+
+### Available materials
+
+<Accordion title="Recommended: Arc (hudWindow)">
+  The default material, providing a strong blur effect similar to the Arc browser.
+  
+  Best for: General use, vibrant gradients
+</Accordion>
+
+<Accordion title="Titlebar">
+  Standard macOS title bar material.
+  
+  Best for: Native macOS look
+</Accordion>
+
+<Accordion title="Sidebar">
+  Optimized for sidebar regions.
+  
+  Best for: Traditional sidebar layouts
+</Accordion>
+
+<Accordion title="Window background">
+  Standard window background material.
+  
+  Best for: Minimal blur, better performance
+</Accordion>
+
+Other materials (menu, popover, sheet, contentBackground, etc.) are available for experimentation. Each material provides different blur intensity, opacity, and vibrancy.
+
+<Note>Materials interact with your desktop wallpaper and the content behind the window, creating different effects based on your setup.</Note>
+
+## Liquid Glass effect
+
+The **Liquid Glass** toggle enables a translucent glass aesthetic throughout the interface. This works in combination with your selected material and space gradients.
+
+<ParamField path="Liquid Glass" type="toggle" default="enabled">
+  Enable translucent glass effect for the browser interface.
+</ParamField>
+
+When disabled, the interface uses more opaque backgrounds for a more traditional browser appearance.
+
+## Color utilities
+
+### Hex color format
+
+Nook uses hex colors with optional alpha channel:
+
+- **6 digits**: `#RRGGBB` (e.g., `#007AFF`)
+- **8 digits**: `#AARRGGBB` (e.g., `#FF007AFF` for opaque blue)
+
+Colors are stored in sRGB color space for consistency across devices.
+
+### System accent color
+
+When no custom gradient is defined, Nook falls back to your macOS system accent color (`#007AFF` default).
+
+## Animation and transitions
+
+Gradients smoothly animate when switching spaces using SwiftUI's `Animatable` conformance:
+
+- Color stops interpolate in RGB space
+- Angles interpolate via cosine/sine to prevent rotation jumps
+- Grain and opacity crossfade
+
+Up to 8 gradient stops are supported for animations. Additional stops are truncated to maintain performance.
+
+## Tips for great gradients
+
+<Tip>
+  **Start simple** - Two-color gradients are often more elegant than complex multi-stop gradients.
+</Tip>
+
+<Tip>
+  **Use grain sparingly** - A grain value of 0.05-0.15 adds texture without overwhelming the design.
+</Tip>
+
+<Tip>
+  **Consider readability** - Ensure sufficient contrast between your gradient and text/icons.
+</Tip>
+
+<Tip>
+  **Match your workflow** - Use warmer colors for creative spaces, cooler colors for productivity.
+</Tip>
+
+<Tip>
+  **Test with content** - View your gradient with actual tabs and websites to ensure it works in practice.
+</Tip>
+
+## Advanced: Gradient encoding
+
+Gradients are encoded as JSON and stored in SwiftData:
+
+```json
+{
+  "angle": 45.0,
+  "nodes": [
+    { "colorHex": "#FF6B6B", "location": 0.0 },
+    { "colorHex": "#4ECDC4", "location": 1.0 }
+  ],
+  "grain": 0.05,
+  "opacity": 0.6
+}
+```
+
+The gradient system normalizes angles to 0-360° and clamps grain/opacity to 0.0-1.0 to ensure valid values.

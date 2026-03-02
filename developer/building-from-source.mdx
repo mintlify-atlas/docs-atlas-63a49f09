@@ -1,0 +1,107 @@
+---
+title: Building from source
+description: Build Nook Browser from source code
+---
+
+You can build Nook from source to test the latest features, contribute to development, or customize the browser for your needs.
+
+## Prerequisites
+
+<Note>
+Nook requires macOS 15.5 or later and Xcode to build from source.
+</Note>
+
+Before you begin, ensure you have:
+
+- **macOS 15.5+**: Nook uses modern macOS APIs that require at least macOS 15.5 (Tahoe)
+- **Xcode**: Download from the [Mac App Store](https://developer.apple.com/xcode/)
+
+## Clone the repository
+
+<Steps>
+  <Step title="Clone Nook">
+    ```bash
+    git clone https://github.com/nook-browser/Nook.git
+    cd Nook
+    ```
+  </Step>
+  
+  <Step title="Open the project">
+    ```bash
+    open Nook.xcodeproj
+    ```
+  </Step>
+</Steps>
+
+<Note>
+No Swift Package Manager setup is needed. All dependencies are embedded locally in `Nook/ThirdParty/` — no `swift package resolve` required.
+</Note>
+
+## Set up code signing
+
+<Warning>
+You must set your personal Development Team in Xcode Signing settings to build locally.
+</Warning>
+
+<Steps>
+  <Step title="Select the Nook target">
+    In Xcode, select the "Nook" target in the project navigator.
+  </Step>
+  
+  <Step title="Go to Signing & Capabilities">
+    Click on the "Signing & Capabilities" tab.
+  </Step>
+  
+  <Step title="Select your team">
+    Under "Team", select your personal Apple Developer account or team.
+  </Step>
+</Steps>
+
+## Build commands
+
+### Debug build
+
+For development and testing:
+
+<CodeGroup>
+```bash Xcode
+# Build and run in Xcode
+# Press Cmd + R
+```
+
+```bash Command line
+xcodebuild -scheme Nook -configuration Debug -arch arm64 -derivedDataPath build
+```
+</CodeGroup>
+
+### Release build
+
+For production use with universal binary support:
+
+```bash
+xcodebuild -scheme Nook -configuration Release -arch arm64 -arch x86_64 -derivedDataPath build
+```
+
+<Note>
+Release builds create a universal binary that supports both Apple Silicon (arm64) and Intel (x86_64) Macs.
+</Note>
+
+## Platform compatibility
+
+### Intel Macs
+
+Some Objective-C libraries may not play nice with Intel Macs, though there should technically be full interoperability. You can use any number of resources to debug if you encounter issues.
+
+### Older macOS versions
+
+For macOS versions older than Tahoe (26.0), you may need to delete a couple lines of code that use APIs only available in newer versions. Look for `@available` annotations in the codebase.
+
+## Next steps
+
+Once you've successfully built Nook, you can:
+
+- Set up your development environment for contributing
+- Run the test suite to verify your build
+- Start exploring the codebase
+
+Join our [Discord](https://discord.gg/J3XfPvg7Fs) to connect with other developers and get help with development.

@@ -1,0 +1,126 @@
+---
+title: Welcome to Nook Browser
+description: A fast, minimal browser with sidebar-first design for macOS
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="Nook Browser Hero"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="Nook Browser Hero"
+/>
+
+## Rethinking browser navigation
+
+Nook is a modern macOS browser built for the way you actually browse the web. With vertical tabs in a persistent sidebar, you get a natural, uncluttered workflow that scales from a handful of tabs to hundreds.
+
+<CardGroup cols={2}>
+  <Card
+    title="Get started"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Install Nook and start browsing in minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Download the DMG or build from source
+  </Card>
+  <Card
+    title="GitHub"
+    icon="github"
+    href="https://github.com/nook-browser/Nook"
+  >
+    Explore the source code and contribute
+  </Card>
+  <Card
+    title="Join Discord"
+    icon="discord"
+    href="https://discord.gg/J3XfPvg7Fs"
+  >
+    Connect with the Nook community
+  </Card>
+</CardGroup>
+
+## Why Nook?
+
+### Sidebar-first navigation
+
+Vertical tabs feel natural and uncluttered. Unlike horizontal tabs that get cramped and unreadable with more than a dozen open, Nook's sidebar scales beautifully. See exactly what you have open, organize tabs into spaces and folders, and never lose track of your workflow.
+
+### Built for performance
+
+Nook is optimized with modern macOS APIs for speed and low memory use. The browser uses:
+
+- **WKWebView** for native WebKit rendering
+- **Swift 6** with strict concurrency for thread safety
+- **Lazy webview loading** to minimize memory footprint
+- **Intelligent tab unloading** to keep inactive tabs from consuming resources
+
+### Minimal, modern interface
+
+Every pixel is focused on content, not chrome. The interface adapts to your needs:
+
+- Customizable sidebar position (left or right)
+- Optional top-bar address view or sidebar-integrated URL entry
+- Configurable materials and visual effects
+- Command palette for keyboard-driven navigation
+
+### Privacy and control
+
+- **Multiple profiles** with isolated data stores for work, personal, and testing
+- **Incognito mode** with non-persistent storage
+- **Cross-site tracking protection** (optional)
+- **Extension support** via WKWebExtension (macOS 15.4+)
+
+### Powerful features
+
+<CardGroup cols={2}>
+  <Card title="Spaces" icon="layer-group">
+    Organize tabs into workspaces with custom gradients and visual themes
+  </Card>
+  <Card title="Split view" icon="columns">
+    View two tabs side-by-side in the same window
+  </Card>
+  <Card title="AI assistant" icon="robot">
+    Built-in chat with Gemini, OpenRouter, or local Ollama models
+  </Card>
+  <Card title="Import from other browsers" icon="file-import">
+    Migrate bookmarks and history from Arc, Safari, or Dia
+  </Card>
+  <Card title="Peek preview" icon="eye">
+    Hover over links to preview pages without opening new tabs
+  </Card>
+  <Card title="Site search" icon="magnifying-glass">
+    Quick shortcuts for searching specific sites (e.g., "gh" for GitHub)
+  </Card>
+</CardGroup>
+
+## System requirements
+
+<Note>
+Nook requires **macOS 15.5 (Sequoia)** or later. Extension support requires macOS 15.4+.
+</Note>
+
+- **Architecture**: Universal (Apple Silicon and Intel)
+- **Built with**: Xcode, Swift 6, SwiftUI
+- **License**: GPL-3.0 (with exceptions for third-party libraries)
+
+## Next steps
+
+Ready to get started? Follow the quickstart guide to install Nook and begin browsing.
+
+<Card
+  title="Quickstart guide"
+  icon="bolt"
+  href="/quickstart"
+>
+  Get Nook installed and configured in under 5 minutes
+</Card>

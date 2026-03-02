@@ -1,0 +1,257 @@
+---
+title: Profiles
+description: Separate browsing contexts with complete data isolation
+---
+
+Profiles in Nook provide complete data isolation, allowing you to maintain separate browsing identities with their own cookies, history, and tabs.
+
+## What are profiles?
+
+Profiles are independent browsing contexts that keep your data completely separated:
+
+- **Isolated data** - Each profile has its own cookies, cache, and storage
+- **Separate sessions** - Stay logged in to different accounts simultaneously
+- **Independent history** - Browsing history is profile-specific
+- **Profile-specific tabs** - Pinned tabs and spaces can be assigned to profiles
+
+### Common use cases
+
+<Card title="Work and personal separation" icon="briefcase">
+  Keep work browsing separate from personal browsing. Stay logged into your work Google account in one profile and your personal account in another.
+</Card>
+
+<Card title="Client projects" icon="users">
+  Create a profile for each client, keeping their credentials, tabs, and browsing data isolated.
+</Card>
+
+<Card title="Testing" icon="flask">
+  Test web applications with different user accounts or permission levels simultaneously.
+</Card>
+
+<Card title="Privacy tiers" icon="shield">
+  Maintain different privacy levels - one profile for logged-in services, another for anonymous browsing.
+</Card>
+
+## Creating profiles
+
+<Steps>
+  <Step title="Open profile settings">
+    Click the menu button at the bottom of the sidebar, then select **Profiles**.
+  </Step>
+  
+  <Step title="Create new profile">
+    Click the **+** button to create a new profile.
+  </Step>
+  
+  <Step title="Configure profile">
+    - **Name** - Give your profile a descriptive name (e.g., "Work", "Personal")
+    - **Icon** - Choose an SF Symbol icon to identify the profile
+  </Step>
+  
+  <Step title="Save profile">
+    Click **Create** to save your new profile.
+  </Step>
+</Steps>
+
+The profile is created with its own persistent data store, ensuring complete isolation from other profiles.
+
+## Switching profiles
+
+<Steps>
+  <Step title="Open profile menu">
+    Click the menu button at the bottom of the sidebar, then select **Profiles**.
+  </Step>
+  
+  <Step title="Select profile">
+    Click the profile you want to switch to.
+  </Step>
+  
+  <Step title="Wait for transition">
+    Nook will transition to the selected profile, loading its spaces and tabs.
+  </Step>
+</Steps>
+
+<Note>
+Switching profiles reloads the browser interface to use the new profile's data store. This ensures complete data isolation.
+</Note>
+
+## Data isolation
+
+Each profile maintains completely separate:
+
+### Browser data
+
+- **Cookies** - Session cookies, persistent cookies, authentication tokens
+- **Local storage** - Website data stored in `localStorage` and `sessionStorage`
+- **Cache** - Disk cache and memory cache for web resources
+- **IndexedDB** - Client-side databases used by web applications
+- **Service workers** - Background scripts registered by websites
+
+### Browsing state
+
+- **History** - Browsing history is profile-specific
+- **Pinned tabs** - Each profile has its own set of global pinned tabs (Essentials)
+- **Profile assignment** - Spaces can be assigned to specific profiles
+
+### Extensions (macOS 15.5+)
+
+- **Extension storage** - Each profile has isolated extension data
+- **Extension state** - Extension settings and preferences are separate
+- **API access** - Extensions interact with the profile's data store
+
+<Tip>
+Profiles use persistent data stores on disk. Your data survives app restarts and is stored in `~/Library/Application Support/Nook/Profiles/`.
+</Tip>
+
+## Profile-specific spaces
+
+You can assign spaces to specific profiles:
+
+1. Right-click a space indicator
+2. Select **Edit Space**
+3. Choose a profile from the dropdown
+4. Click **Save**
+
+When you switch profiles:
+
+- **Assigned spaces** - Only spaces assigned to that profile are visible
+- **Unassigned spaces** - Spaces without a profile assignment are visible in all profiles
+
+<Note>
+Assigning spaces to profiles helps organize your workspaces. For example, keep all work spaces in your "Work" profile.
+</Note>
+
+## Default profile
+
+Nook automatically creates a "Default" profile on first launch:
+
+- Used when no other profile is selected
+- Cannot be deleted (must have at least one profile)
+- Can be renamed and customized
+
+The default profile is your primary browsing context if you don't use multiple profiles.
+
+## Incognito mode vs profiles
+
+Profiles and incognito mode serve different purposes:
+
+### Profiles
+
+- **Persistent** - Data is saved to disk
+- **Isolated** - Complete separation between profiles
+- **Multiple identities** - Stay logged in to different accounts
+- **Long-term** - Maintain separate browsing contexts over time
+
+### Incognito mode
+
+- **Ephemeral** - No data is saved when the window closes
+- **Private** - Browsing history and cookies are temporary
+- **Single session** - Data exists only for the window's lifetime
+- **No tracking** - Ideal for one-time sessions
+
+<Card title="Combining both" icon="lock">
+  You can use incognito mode within a profile context. This gives you temporary browsing without affecting the profile's saved data.
+</Card>
+
+## Profile management
+
+### Deleting profiles
+
+<Steps>
+  <Step title="Open profile settings">
+    Navigate to **Settings → Profiles**.
+  </Step>
+  
+  <Step title="Select profile">
+    Click the profile you want to delete.
+  </Step>
+  
+  <Step title="Delete profile">
+    Click the **Delete** button.
+  </Step>
+  
+  <Step title="Confirm deletion">
+    Confirm the deletion in the dialog.
+  </Step>
+</Steps>
+
+<Warning>
+Deleting a profile permanently removes all its data:
+- Cookies and cache
+- Browsing history
+- Local storage
+- Profile-assigned spaces (spaces themselves are preserved, but lose profile assignment)
+
+This action cannot be undone.
+</Warning>
+
+### Editing profiles
+
+Edit profile details:
+
+1. Open **Settings → Profiles**
+2. Click the profile to edit
+3. Update the name or icon
+4. Click **Save**
+
+Changes take effect immediately.
+
+## Profile data size
+
+View how much data each profile is using:
+
+1. Open **Settings → Profiles**
+2. Select a profile
+3. View the **Data Size** section
+
+This shows:
+
+- **Cookie count** - Number of cookies stored
+- **Cache records** - Number of cached resources
+- **Estimated size** - Approximate disk space used
+
+## Technical implementation
+
+Profiles use WebKit's `WKWebsiteDataStore` API for data isolation:
+
+- Each profile gets a unique `UUID` identifier
+- Data stores are persistent and deterministic
+- Profile data is stored in `~/Library/Application Support/Nook/Profiles/{UUID}/`
+- WebViews are configured with the profile's data store
+
+<Note>
+Profiles require macOS 15.4+ for full functionality. On older systems, Nook falls back to a shared data store.
+</Note>
+
+## Best practices
+
+### Profile naming
+
+Use clear, descriptive names:
+
+- **Work** - For work-related browsing
+- **Personal** - For personal accounts
+- **Client: Acme Corp** - For specific clients
+- **Testing** - For development and testing
+
+### Profile organization
+
+Organize your workflow:
+
+1. Create a profile for each major context
+2. Assign spaces to profiles for organization
+3. Use global pinned tabs for apps you need in every profile
+4. Use incognito mode for temporary sessions within a profile
+
+### Data management
+
+Periodically review and clean up:
+
+- Check profile data sizes
+- Delete unused profiles
+- Clear cookies and cache for profiles you no longer use
+
+<Card title="Keyboard shortcuts" icon="keyboard">
+  - `Cmd+Shift+P` - Switch profiles
+  - `Cmd+,` then Profiles - Open profile settings
+</Card>

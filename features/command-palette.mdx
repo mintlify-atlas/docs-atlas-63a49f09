@@ -1,0 +1,205 @@
+---
+title: Command palette
+description: Quick actions, navigation, and search with the keyboard-first command palette
+---
+
+The command palette is your keyboard-driven control center for Nook. It provides instant access to tabs, history, search, and quick actions without taking your hands off the keyboard.
+
+## Opening the command palette
+
+Open the command palette with:
+
+- **Keyboard shortcut** - `Cmd+T` (new tab) or `Cmd+L` (current tab)
+- **Click URL bar** - Click the URL field in the sidebar header
+- **Context menu** - Right-click sidebar → **New Tab**
+
+<Note>
+`Cmd+T` opens the palette for creating a new tab, while `Cmd+L` opens it to navigate the current tab.
+</Note>
+
+## Search and navigation
+
+The command palette is a unified search interface:
+
+Type in the search field to:
+
+- **Navigate to URLs** - Enter a URL to visit it
+- **Search the web** - Enter search terms to search with your default search engine
+- **Switch to existing tabs** - See matching open tabs
+- **Browse history** - View recently visited pages
+
+### Smart URL detection
+
+The palette automatically detects whether you're entering a URL or search query:
+
+- **URL indicators** - Domain names (`.com`, `.org`, etc.)
+- **Search indicators** - Plain text without domain indicators
+
+The icon on the left adapts:
+
+- **Globe icon** - URL detected
+- **Magnifying glass** - Search query
+
+<Tip>
+You don't need to type the full URL. Enter `github` and press Tab to quickly search GitHub, or just press Enter to navigate to github.com.
+</Tip>
+
+## Site-specific search
+
+Search within specific websites using site search shortcuts:
+
+<Steps>
+  <Step title="Type the site trigger">
+    Enter a configured site trigger (e.g., `gh` for GitHub).
+  </Step>
+  
+  <Step title="Press Tab">
+    Press Tab to activate site search mode.
+  </Step>
+  
+  <Step title="Enter search query">
+    Type your search query and press Enter.
+  </Step>
+</Steps>
+
+The palette shows a colored badge indicating the active site search:
+
+- **GitHub** - Search GitHub repositories
+- **YouTube** - Search YouTube videos
+- **Wikipedia** - Search Wikipedia articles
+
+Configure site search shortcuts in **Settings → Search**.
+
+<Card title="Example site search" icon="magnifying-glass">
+  Type `gh nook browser` → Tab → "swift ui" → Enter
+  
+  This searches GitHub for "swift ui" within the nook browser repository.
+</Card>
+
+## Suggestions
+
+The command palette shows intelligent suggestions as you type:
+
+### Tab suggestions
+
+Existing tabs that match your query:
+
+- Shows tab title and URL
+- Displays the tab's favicon
+- Click or press Enter to switch to that tab
+
+### History suggestions
+
+Recently visited pages from your browsing history:
+
+- Filtered to the current profile
+- Sorted by recency
+- Shows page title and URL
+- Click or press Enter to navigate
+
+### URL suggestions
+
+Direct URL matches:
+
+- Shown when you type a domain
+- Press Enter to navigate directly
+
+### Search suggestions
+
+Search queries generated from your input:
+
+- Sent to your default search engine
+- Press Enter to search
+
+<Note>
+Suggestions are profile-aware. You'll only see tabs and history from your current profile, ensuring privacy and relevance.
+</Note>
+
+## Keyboard navigation
+
+Navigate suggestions entirely with the keyboard:
+
+- **Up/Down arrows** - Move selection up or down
+- **Enter** - Activate the selected suggestion
+- **Tab** - Activate site search (when available)
+- **Escape** - Close the command palette
+- **Delete/Backspace** - Exit site search mode (when search field is empty)
+
+The selected suggestion is highlighted with your space's accent color.
+
+## Behavior modes
+
+The command palette has two behavior modes:
+
+### New tab mode (default)
+
+- Opened with `Cmd+T`
+- Creates a new tab in the current space
+- Does not navigate the current tab
+
+### Navigate mode
+
+- Opened with `Cmd+L` or by clicking the URL bar
+- Navigates the current tab to the entered URL
+- Does not create a new tab
+
+<Tip>
+Use `Cmd+L` when you want to change the current page, and `Cmd+T` when you want to keep the current page and open something new.
+</Tip>
+
+## Visual design
+
+The command palette features:
+
+- **Glassmorphism** - Translucent background with blur effect
+- **Adaptive width** - Fits window size (765px default, responsive)
+- **Accent colors** - Uses your space's gradient colors
+- **Smooth animations** - Transitions between states
+
+The palette appears centered at the top of the window, overlaying your web content.
+
+## Search scope
+
+Search scope changes based on your context:
+
+### Profile filtering
+
+Tabs and history are filtered to your current profile:
+
+- Work profile sees only work tabs and history
+- Personal profile sees only personal tabs and history
+
+### Incognito mode
+
+In incognito windows:
+
+- No history suggestions (incognito browsing is not saved)
+- Only tabs from the current incognito session
+- Search still works normally
+
+<Card title="Keyboard shortcuts" icon="keyboard">
+  - `Cmd+T` - Open palette (new tab mode)
+  - `Cmd+L` - Open palette (navigate mode)
+  - `Up/Down` - Navigate suggestions
+  - `Enter` - Activate selection
+  - `Tab` - Activate site search
+  - `Escape` - Close palette
+</Card>
+
+## Quick actions
+
+Beyond navigation, the command palette provides quick access to:
+
+- **Tab switching** - Jump to any open tab instantly
+- **History browsing** - Revisit recent pages
+- **Multi-window search** - Finds tabs across all windows
+
+The command palette updates in real-time as you type, providing instant feedback and results.
+
+## Customization
+
+Customize command palette behavior in **Settings → General**:
+
+- **Default search engine** - Choose your preferred search provider
+- **Site search shortcuts** - Configure custom site searches
+- **Search suggestions** - Enable or disable suggestion types

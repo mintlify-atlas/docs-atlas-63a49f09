@@ -1,0 +1,366 @@
+---
+title: "Tracking protection"
+description: "Built-in privacy features that block trackers and protect your data"
+icon: "shield-halved"
+---
+
+## Overview
+
+Nook Browser includes opt-in tracking protection that combines content rule lists with conservative third-party storage restrictions. When enabled, tracking protection blocks known tracking domains and prevents third-party iframes from accessing cookies and storage.
+
+<Info>
+Tracking protection is disabled by default. Enable it in Settings to activate cross-site tracking protections.
+</Info>
+
+## How tracking protection works
+
+### Two-layer protection
+
+Nook's tracking protection uses a dual approach:
+
+1. **Content rule lists**: Block known tracking domains and resources using WebKit's `WKContentRuleList` API
+2. **Third-party cookie script**: Prevent cross-site iframes from accessing `document.cookie` and Storage Access API
+
+### Content blocking
+
+When tracking protection is enabled, Nook compiles and installs content blocking rules:
+
+- **Third-party cookie blocking**: Attempts to block all cookies loaded from third-party contexts
+- **Tracker domain blocking**: Blocks requests to known tracking domains
+- **Fallback mode**: If cookie blocking is unsupported, falls back to domain-only blocking
+
+See: `TrackingProtectionManager.swift:242-292`
+
+### JavaScript-based cookie blocking
+
+Nook injects a user script into third-party iframes:
+
+```javascript
+// From TrackingProtectionManager.swift:22-50
+(function() {
+  // Only act in embedded contexts
+  if (window.top === window) return;
+  
+  // Check if this is a third-party iframe
+  var ref = document.referrer || "";
+  var thirdParty = false;
+  try {
+    var refHost = ref ? new URL(ref).hostname : null;
+    thirdParty = !!refHost && refHost !== window.location.hostname;
+  } catch (e) { thirdParty = false; }
+  if (!thirdParty) return;
+  
+  // Neuter document.cookie in third-party contexts
+  Object.defineProperty(document, 'cookie', {
+    configurable: false,
+    enumerable: false,
+    get: function() { return ''; },
+    set: function(_) { return true; }
+  });
+  
+  // Deny Storage Access API
+  document.requestStorageAccess = function() {
+    return Promise.reject(new DOMException('Blocked by Nook', 'NotAllowedError'));
+  };
+})();
+```
+
+The script:
+- Only activates in embedded iframes (not main frames)
+- Checks if the iframe is cross-site using `document.referrer`
+- Overrides `document.cookie` to return empty string and ignore writes
+- Blocks the Storage Access API with a rejected promise
+
+## Blocked tracking domains
+
+Nook maintains a built-in list of common tracking domains:
+
+### Analytics and tracking
+
+- `google-analytics.com`
+- `analytics.google.com`
+- `googletagmanager.com`
+- `googletagservices.com`
+- `doubleclick.net`
+- `hotjar.com`
+- `segment.io` / `cdn.segment.com`
+- `mixpanel.com`
+- `optimizely.com`
+- `clarity.ms`
+
+### Social media trackers
+
+- `facebook.net`
+- `connect.facebook.net`
+- `graph.facebook.com`
+
+### Ad networks
+
+- `adsystem.com`
+- `adservice.google.com`
+
+### Error tracking
+
+- `sentry.io`
+- `newrelic.com`
+
+See: `TrackingProtectionManager.swift:246-265`
+
+<Note>
+The tracker list is conservative and focused on common analytics and advertising domains. Nook prioritizes compatibility over aggressive blocking.
+</Note>
+
+## Exceptions and allowlisting
+
+### Per-domain allowlist
+
+You can disable tracking protection for specific domains:
+
+```swift
+// From TrackingProtectionManager.swift:86-98
+func allowDomain(_ host: String, allowed: Bool = true) {
+    let norm = host.lowercased()
+    if allowed { allowedDomains.insert(norm) } else { allowedDomains.remove(norm) }
+    
+    // Update existing tabs for this host
+    for tab in browserManager.tabManager.allTabs() {
+        if tab.webView?.url?.host?.lowercased() == norm {
+            if allowed { removeTracking(from: wv) } else { applyTracking(to: wv) }
+            wv.reloadFromOrigin()
+        }
+    }
+}
+```
+
+When you allow a domain:
+- Tracking protection is disabled for that domain
+- All existing tabs on that domain are updated and reloaded
+- The domain remains allowed until you revoke it
+
+### Temporary disabling
+
+You can temporarily disable tracking protection for a specific tab:
+
+<Steps>
+  <Step title="Disable for duration">
+    Call `disableTemporarily(for: tab, duration: seconds)` to disable tracking protection for a specific time period.
+  </Step>
+  
+  <Step title="Tab reloads">
+    The tab's webview has tracking protection removed and reloads from origin.
+  </Step>
+  
+  <Step title="Automatic re-enable">
+    After the duration expires, tracking protection is automatically re-applied and the tab reloads again.
+  </Step>
+</Steps>
+
+See: `TrackingProtectionManager.swift:65-84`
+
+### OAuth flow exemption
+
+Tracking protection is automatically disabled for OAuth flow tabs:
+
+```swift
+// From TrackingProtectionManager.swift:203-210
+private func shouldApplyTracking(to tab: Tab) -> Bool {
+    if !isEnabled { return false }
+    if isTemporarilyDisabled(tabId: tab.id) { return false }
+    if isDomainAllowed(tab.webView?.url?.host) { return false }
+    // Never apply tracking protection to OAuth flow tabs
+    if tab.isOAuthFlow { return false }
+    return true
+}
+```
+
+This prevents tracking protection from breaking authentication flows on sites like:
+- `accounts.google.com`
+- `login.microsoftonline.com`
+- `github.com/login`
+- And other OAuth providers
+
+See: `OAuthDetector.swift` for OAuth detection logic
+
+## Enabling tracking protection
+
+<Steps>
+  <Step title="Enable in settings">
+    Call `setEnabled(true)` to activate tracking protection globally.
+  </Step>
+  
+  <Step title="Rule compilation">
+    Nook compiles content blocking rules from JSON and stores them in WebKit's rule list store for reuse.
+  </Step>
+  
+  <Step title="Apply to configuration">
+    The compiled rule list is added to the shared `WKWebViewConfiguration` used by all new tabs.
+  </Step>
+  
+  <Step title="Update existing webviews">
+    All existing tabs have tracking protection applied to their webviews and are reloaded from origin.
+  </Step>
+</Steps>
+
+See: `TrackingProtectionManager.swift:109-122`
+
+### Disabling tracking protection
+
+When you disable tracking protection:
+
+1. Content rule lists are removed from the shared configuration
+2. The third-party cookie script is removed from user scripts
+3. All existing webviews have tracking protection removed
+4. All tabs are reloaded from origin to apply changes
+
+See: `TrackingProtectionManager.swift:167-174`, `191-200`
+
+## Configuration details
+
+### Rule list compilation
+
+Nook uses WebKit's `WKContentRuleListStore` for efficient rule compilation:
+
+- Rules are compiled once and cached on disk
+- On subsequent launches, Nook looks up the cached compiled list
+- If cookie blocking fails to compile (unsupported action), Nook falls back to domain-only blocking
+- Rules are identified by `"NookTrackingBlocker"` (or `"NookTrackingBlocker.fallback"` for fallback mode)
+
+See: `TrackingProtectionManager.swift:125-153`
+
+### Shared vs. per-webview configuration
+
+Tracking protection is applied at two levels:
+
+#### Shared configuration
+
+The base `WKWebViewConfiguration` used by all new tabs:
+- Rule lists are added to `userContentController`
+- User script is injected at document start
+- New tabs automatically inherit these settings
+
+See: `TrackingProtectionManager.swift:155-165`
+
+#### Per-webview application
+
+Existing webviews are updated individually:
+- Each tab's webview configuration is checked
+- Tracking protection is applied or removed based on tab state
+- Webview is reloaded from origin to ensure rules take effect
+
+See: `TrackingProtectionManager.swift:177-189`, `212-229`
+
+## Refresh and updates
+
+You can refresh tracking protection for a specific tab:
+
+```swift
+// From TrackingProtectionManager.swift:231-239
+func refreshFor(tab: Tab) {
+    guard let wv = tab.webView else { return }
+    if shouldApplyTracking(to: tab) {
+        applyTracking(to: wv)
+    } else {
+        removeTracking(from: wv)
+    }
+    wv.reloadFromOrigin()
+}
+```
+
+This is useful when:
+- Tab state changes (e.g., becomes an OAuth flow)
+- Domain is added to or removed from allowlist
+- Temporary exemption expires
+
+## Limitations and compatibility
+
+<Warning>
+Tracking protection may break some websites that rely on third-party scripts or cross-site cookies. Use the domain allowlist to exempt sites that don't work correctly.
+</Warning>
+
+### Known limitations
+
+1. **Cookie blocking action**: The `block-cookies` action may not be supported on all macOS versions. Nook falls back to domain blocking if compilation fails.
+
+2. **First-party trackers**: Tracking protection only blocks third-party requests. First-party analytics (same domain as the site) are not blocked.
+
+3. **Fingerprinting**: Tracking protection doesn't prevent browser fingerprinting techniques that don't rely on cookies or scripts.
+
+4. **Network-level tracking**: Your ISP, employer, or network administrator can still monitor your browsing regardless of tracking protection.
+
+### Compatibility considerations
+
+- **Social media embeds**: Facebook, Twitter, and other social widgets may not load with tracking protection enabled
+- **Embedded videos**: YouTube and Vimeo embeds may require third-party cookies
+- **Payment processors**: Checkout flows using embedded payment forms may need exemptions
+- **Single sign-on**: Some SSO implementations may break; OAuth flows are auto-exempted
+
+## Technical implementation
+
+### Manager lifecycle
+
+The `TrackingProtectionManager` is attached to `BrowserManager`:
+
+```swift
+func attach(browserManager: BrowserManager) {
+    self.browserManager = browserManager
+}
+```
+
+This provides access to the tab manager for updating existing webviews.
+
+See: `TrackingProtectionManager.swift:105-107`
+
+### Rule JSON structure
+
+Content blocking rules use WebKit's JSON format:
+
+```json
+[
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "load-type": ["third-party"]
+    },
+    "action": { "type": "block-cookies" }
+  },
+  {
+    "trigger": { "url-filter": "google-analytics\\.com" },
+    "action": { "type": "block" }
+  }
+]
+```
+
+Each rule has:
+- **trigger**: Specifies when the rule applies (URL pattern, load type)
+- **action**: What to do when triggered (block, block-cookies, etc.)
+
+See: `TrackingProtectionManager.swift:242-292`
+
+### State tracking
+
+The manager tracks several types of state:
+
+- `isEnabled`: Global on/off toggle
+- `installedRuleList`: Compiled `WKContentRuleList` instance
+- `temporarilyDisabledTabs`: Map of tab ID → expiration date for temporary exemptions
+- `allowedDomains`: Set of domains permanently exempted from tracking protection
+
+See: `TrackingProtectionManager.swift:14-55`
+
+## Best practices
+
+<Note>
+**Test before enabling globally**: Try tracking protection on a few sites first to ensure compatibility with your frequently visited websites.
+</Note>
+
+<Note>
+**Use temporary disabling for troubleshooting**: If a site breaks, disable tracking protection temporarily to confirm it's the cause before adding a permanent exemption.
+</Note>
+
+<Note>
+**Combine with incognito mode**: For maximum privacy, use tracking protection in incognito windows where all data is ephemeral.
+</Note>
+
+<Info>
+Tracking protection is most effective when combined with other privacy measures like HTTPS-only mode, regular cookie cleanup, and separate profiles for different browsing contexts.
+</Info>

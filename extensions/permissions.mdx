@@ -1,0 +1,251 @@
+---
+title: Extension permissions
+description: Understand and control what extensions can access
+---
+
+Nook uses a permission model based on Chrome's approach, where extensions declare what they need access to and you control what they can use.
+
+## Permission types
+
+Extensions can request different types of permissions:
+
+### API permissions
+
+These grant access to browser APIs:
+
+- `storage` - Store and retrieve data locally
+- `tabs` - Access basic information about all tabs
+- `activeTab` - Access the currently active tab when you click the extension
+- `bookmarks` - Read and modify your bookmarks
+- `history` - Access your browsing history
+- `cookies` - Access cookies for websites
+- `webNavigation` - Monitor and analyze web page navigation
+- `scripting` - Inject scripts into web pages
+- `notifications` - Display system notifications
+
+### Host permissions
+
+These control which websites an extension can access:
+
+- **Specific domain** - `https://github.com/*` (only GitHub)
+- **Subdomain wildcard** - `https://*.google.com/*` (all Google subdomains)
+- **All URLs** - `<all_urls>` or `https://*/*` (every website)
+
+<Warning>
+Be cautious with extensions requesting `<all_urls>`. This grants access to every website you visit, including sensitive sites like banking.
+</Warning>
+
+## Install-time vs runtime permissions
+
+Nook follows Chrome's permission model:
+
+### Install-time permissions
+
+Permissions in the manifest `permissions` and `host_permissions` arrays are granted **automatically when you install** the extension.
+
+```json
+{
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://*.example.com/*"]
+}
+```
+
+When you install an extension, Nook:
+
+1. Shows you all requested permissions
+2. Asks you to approve them
+3. Grants them all if you click "Add Extension"
+
+You cannot selectively grant some permissions at install time - it's all or nothing.
+
+<Note>
+This matches Chrome's behavior where installing an extension means consenting to all its manifest permissions.
+</Note>
+
+### Runtime permissions
+
+Permissions in the manifest `optional_permissions` and `optional_host_permissions` arrays require **explicit user action** at runtime.
+
+```json
+{
+  "optional_permissions": ["bookmarks", "history"],
+  "optional_host_permissions": ["https://*.github.com/*"]
+}
+```
+
+Extensions must call `chrome.permissions.request()` in response to a user action (like clicking a button) to get these permissions.
+
+## Permission prompts
+
+### During installation
+
+When you install an extension, Nook displays:
+
+<Steps>
+  <Step title="Extension identity">
+    Shows the extension name and icon
+  </Step>
+  
+  <Step title="Permission list">
+    Lists each permission with a human-readable description:
+    
+    - "Store and retrieve data locally" for `storage`
+    - "Access the currently active tab when you click the extension" for `activeTab`
+    - "Read and modify your bookmarks" for `bookmarks`
+  </Step>
+  
+  <Step title="Grant or deny">
+    You can:
+    - Click "Add Extension" to grant all permissions and install
+    - Click "Cancel" to reject installation
+  </Step>
+</Steps>
+
+### During runtime
+
+When an extension calls `chrome.permissions.request()`, Nook shows a similar dialog:
+
+- **What changed** - New permissions being requested
+- **Why** - The extension should explain why it needs them
+- **Grant or deny** - You can approve or reject the request
+
+<Note>
+Runtime permission requests must be triggered by a user action. Extensions cannot request permissions automatically in the background.
+</Note>
+
+## How permissions are granted
+
+### Automatic grants
+
+When you install or load an extension, Nook automatically grants:
+
+1. All manifest `permissions`
+2. All manifest `host_permissions`
+3. All manifest `optional_permissions` (for backwards compatibility)
+4. All manifest `optional_host_permissions` (for backwards compatibility)
+
+<Warning>
+Nook currently grants optional permissions automatically at load time. This is more permissive than Chrome's behavior and will be refined in future versions.
+</Warning>
+
+### Explicit URL grants
+
+For content scripts to inject and extension messaging to work, Nook grants extensions **explicit URL access** when you navigate to matching pages.
+
+This is required because WKWebExtensionController uses Safari's per-URL permission model, where granted match patterns don't automatically give URL access.
+
+## Managing permissions after installation
+
+### View current permissions
+
+To see what permissions an extension has:
+
+<Steps>
+  <Step title="Open Extensions settings">
+    Navigate to Settings → Extensions
+  </Step>
+  
+  <Step title="Select an extension">
+    Click on the extension to view details
+  </Step>
+  
+  <Step title="View permissions">
+    See the full list of granted permissions and host access
+  </Step>
+</Steps>
+
+### Revoke permissions
+
+Currently, Nook does not support revoking individual permissions after installation. To limit an extension's access:
+
+1. **Disable the extension** - Prevents it from running
+2. **Uninstall and reinstall** - If the extension adds optional permissions support
+
+<Note>
+Fine-grained permission management (revoking individual permissions) may be added in a future version.
+</Note>
+
+## Extension permission behavior
+
+### Background workers
+
+Extension background workers (service workers or background pages) have access to:
+
+- All granted API permissions
+- The ability to inject content scripts into pages matching host permissions
+- Communication with content scripts via `chrome.runtime` messaging
+
+### Content scripts
+
+Content scripts run in web pages and can:
+
+- Access the page DOM
+- Communicate with the background worker via `chrome.runtime.sendMessage()`
+- Use granted host permissions to make cross-origin requests (in MAIN world)
+
+### Popup pages
+
+Extension popups have the same permissions as background workers:
+
+- All API permissions
+- Ability to query tabs and windows
+- Access to `chrome.storage`, `chrome.runtime`, etc.
+
+## Permission security
+
+### Principle of least privilege
+
+Only grant permissions that extensions actually need:
+
+- **Question broad permissions** - Does a calculator extension really need access to all websites?
+- **Check match patterns** - `<all_urls>` is usually unnecessary
+- **Review API usage** - Does it need `history` or just `activeTab`?
+
+### Extension trust
+
+Before installing an extension:
+
+1. **Check the source** - Install from trusted developers or stores
+2. **Read reviews** - See what other users say
+3. **Examine permissions** - Ensure they make sense for the extension's purpose
+4. **Test in a separate profile** - Use a test profile first if you're unsure
+
+<Warning>
+Extensions with `<all_urls>` access can read passwords, credit card numbers, and other sensitive data from web pages. Only install extensions you trust completely.
+</Warning>
+
+## Permission isolation
+
+Extension permissions are **granted globally** but storage is **isolated per profile**:
+
+- Installing an extension in one profile makes it available in all profiles
+- Permission grants apply across all profiles
+- Extension storage (cookies, localStorage) is separate per profile
+
+This means:
+
+- You can't grant permissions to an extension in one profile but not another
+- You can use the same extension with different user accounts in different profiles
+- Extension data doesn't leak between profiles
+
+## Debugging permission issues
+
+If an extension isn't working:
+
+<Accordion title="Content scripts not injecting">
+1. Check that the extension has `host_permissions` matching the page URL
+2. Verify the extension is enabled in Settings → Extensions
+3. Look for permission errors in Web Inspector console
+</Accordion>
+
+<Accordion title="API calls failing">
+1. Ensure the extension requested the necessary API permission
+2. Check that the permission appears in the extension's granted permissions
+3. Look for `chrome.runtime.lastError` in the console
+</Accordion>
+
+<Accordion title="Cross-origin requests blocked">
+1. Verify the extension has `host_permissions` for the target domain
+2. Content scripts in ISOLATED world use extension origin (may cause CORS errors)
+3. Consider if the content script should run in MAIN world instead
+</Accordion>

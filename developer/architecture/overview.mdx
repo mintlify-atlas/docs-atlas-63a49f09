@@ -1,0 +1,205 @@
+---
+title: Architecture overview
+description: Understanding Nook's manager-based architecture and application structure
+---
+
+Nook follows a **manager-based architecture** where specialized managers handle distinct feature domains, coordinated through SwiftUI environment injection. This design separates concerns while maintaining type-safe communication between components.
+
+## Core architectural principles
+
+<CardGroup cols={2}>
+  <Card title="Manager-based pattern" icon="boxes-stacked">
+    Each feature domain has a dedicated manager (TabManager, ProfileManager, etc.) that owns business logic and state.
+  </Card>
+  <Card title="Environment injection" icon="plug">
+    Managers are injected via `@EnvironmentObject` and `@Environment`, eliminating global singletons (except legacy cases).
+  </Card>
+  <Card title="Reactive state" icon="bolt">
+    Models use Swift's `@Observable` macro and Combine's `@Published` for automatic UI updates.
+  </Card>
+  <Card title="MainActor confinement" icon="lock">
+    All state management is `@MainActor` confined for thread safety.
+  </Card>
+</CardGroup>
+
+## Application entry flow
+
+Nook's initialization follows a hierarchical structure:
+
+```
+NookApp.swift (@main)           — App entry point, creates WindowGroup scene
+  ├─ BrowserManager              — Central coordinator (being refactored)
+  ├─ WindowRegistry              — Multi-window state tracking
+  ├─ WebViewCoordinator          — WebView pool management
+  └─ NookSettingsService         — User preferences
+       ↓
+  ContentView.swift              — Per-window container, creates BrowserWindowState
+  ├─ BrowserWindowState          — Window-specific state (current tab, sidebar width)
+  └─ WindowRegistry.register()   — Registers window with global registry
+       ↓
+  WindowView.swift               — Main browser UI layout
+  ├─ Sidebar                     — Tab list, spaces, profiles
+  ├─ WebsiteView                 — Active web content
+  ├─ TopBar                      — URL bar, navigation controls
+  └─ StatusBar                   — Download progress, status info
+```
+
+### Environment injection flow
+
+The dependency graph looks like this (from `NookApp.swift:38-86`):
+
+```swift
+// NookApp creates global coordinators
+@State private var windowRegistry = WindowRegistry()
+@State private var webViewCoordinator = WebViewCoordinator()
+@State private var settingsManager = NookSettingsService()
+@StateObject private var browserManager = BrowserManager()
+
+// Injected into ContentView
+ContentView()
+  .environmentObject(browserManager)
+  .environment(windowRegistry)
+  .environment(webViewCoordinator)
+  .environment(\.nookSettings, settingsManager)
+
+// Each window gets its own state
+@State private var defaultWindowState = BrowserWindowState()
+WindowView()
+  .environment(windowState)
+```
+
+<Note>
+  `BrowserManager` is currently injected as `@EnvironmentObject` (legacy Combine pattern). Future refactoring will migrate it to `@Environment` with Swift Observation.
+</Note>
+
+## Window management
+
+Nook supports **multiple independent windows**, each with its own state:
+
+- **BrowserWindowState** (`Nook/Models/BrowserWindowState.swift:15`) — Tracks current tab, space, profile, sidebar width, and UI flags per window
+- **WindowRegistry** (`Nook/Managers/WindowRegistry/WindowRegistry.swift:14`) — Single source of truth for all open windows
+- **WebViewCoordinator** (`Nook/Managers/WebViewCoordinator/WebViewCoordinator.swift:14`) — Manages webview instances across windows
+
+When a user opens the same tab in multiple windows:
+1. First window gets the "primary" webview from `Tab.webView`
+2. Additional windows get "clone" webviews created by `WebViewCoordinator.createCloneWebView()` (`WebViewCoordinator.swift:149`)
+3. All webviews share the same `WKWebViewConfiguration` for extension/process pool consistency
+
+## Top-level modules
+
+Nook's codebase is organized into these directories:
+
+| Directory | Purpose | Example Files |
+|-----------|---------|---------------|
+| `App/` | Entry point, window management, app lifecycle | `NookApp.swift`, `ContentView.swift`, `AppDelegate.swift` |
+| `Nook/Managers/` | ~27 feature managers (business logic) | `BrowserManager/`, `TabManager/`, `ProfileManager/` |
+| `Nook/Models/` | Data models and SwiftData entities | `Tab/`, `Space/`, `Profile/`, `BrowserConfig/` |
+| `Nook/Components/` | SwiftUI view components | `Browser/`, `Sidebar/`, `Extensions/` |
+| `Nook/Protocols/` | Protocol definitions | `TabListDataSource` |
+| `Nook/Utils/` | Utilities, WebKit extensions, Metal shaders | `WebKit/`, `Shaders/`, `Debug/` |
+| `Nook/ThirdParty/` | Embedded dependencies | `BigUIPaging`, `swift-atomics` |
+| `Settings/` | Settings module | Settings screens |
+| `CommandPalette/` | Command palette UI | Quick action interface |
+| `UI/` | Shared UI components | Reusable SwiftUI views |
+
+<Note>
+  Nook embeds all dependencies locally in `Nook/ThirdParty/` — no Swift Package Manager resolution needed.
+</Note>
+
+## BrowserManager: The central coordinator
+
+`BrowserManager` (`Nook/Managers/BrowserManager/BrowserManager.swift:18`) is currently a ~2800-line "god object" that connects all managers. It's being incrementally refactored toward independent managers.
+
+**Current responsibilities:**
+- Owns all feature managers (TabManager, ProfileManager, ExtensionManager, etc.)
+- Coordinates tab/space/profile operations
+- Handles window lifecycle callbacks
+- Routes commands from menu bar and keyboard shortcuts
+
+**Refactoring plan:**
+- Managers will become fully independent
+- Environment injection will replace direct references
+- BrowserManager will eventually be eliminated
+
+```swift
+// Current (legacy)
+@EnvironmentObject var browserManager: BrowserManager
+browserManager.tabManager.createTab(...)
+
+// Future (independent managers)
+@Environment(TabManager.self) private var tabManager
+tabManager.createTab(...)
+```
+
+## Persistence architecture
+
+Nook uses **SwiftData** for persistent storage:
+
+- **Schema** defined in `BrowserManager.swift:29-37`:
+  - `SpaceEntity`, `ProfileEntity`, `TabEntity`, `FolderEntity`
+  - `HistoryEntity`, `ExtensionEntity`, `TabsStateEntity`
+
+- **Atomic persistence** via `PersistenceActor` (`TabManager/TabManager.swift:12`) — Coalesced writes with backup recovery
+
+- **Data isolation** via `WKWebsiteDataStore` per profile (`Profile.swift:82-98`)
+
+See [State management](/developer/architecture/state-management) for details on persistence patterns.
+
+## Key design patterns
+
+<Accordion title="Lazy webview initialization">
+  Tabs exist without loaded webviews to save memory. `Tab.webView` is lazily initialized on first access (`Tab.swift:18`).
+  
+  ```swift
+  // Tab can exist without webview
+  let tab = Tab(url: url, name: "Example")
+  
+  // Webview created on first access
+  let webView = tab.webView // Triggers lazy init
+  ```
+</Accordion>
+
+<Accordion title="Multi-window webview cloning">
+  When the same tab appears in multiple windows, `WebViewCoordinator` creates separate webview instances:
+  
+  - **Primary webview**: Owned by the tab, created for the first window
+  - **Clone webviews**: Additional instances for other windows
+  
+  All share the same configuration for extension compatibility (`WebViewCoordinator.swift:96-131`).
+</Accordion>
+
+<Accordion title="Profile data isolation">
+  Each `Profile` owns a unique `WKWebsiteDataStore` for complete data separation:
+  
+  - **Persistent profiles**: Use `WKWebsiteDataStore(forIdentifier: profileId)`
+  - **Ephemeral profiles**: Use `WKWebsiteDataStore.nonPersistent()`
+  
+  Cookies, localStorage, and IndexedDB are isolated per profile (`Profile.swift:82-98`).
+</Accordion>
+
+<Accordion title="Atomic snapshot persistence">
+  `TabManager` uses a Swift actor (`PersistenceActor`) for thread-safe, coalesced writes:
+  
+  1. Snapshot current state (tabs, spaces, folders)
+  2. Create atomic transaction in child `ModelContext`
+  3. On failure, fall back to best-effort save or restore from backup
+  
+  This prevents data corruption during crashes (`TabManager.swift:89-124`).
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Managers" icon="gears" href="/developer/architecture/managers">
+    Deep dive into the manager pattern and individual manager responsibilities
+  </Card>
+  <Card title="Models" icon="database" href="/developer/architecture/models">
+    Explore data models and SwiftData entities
+  </Card>
+  <Card title="State management" icon="arrows-rotate" href="/developer/architecture/state-management">
+    Learn about @Observable vs @Published patterns and persistence
+  </Card>
+  <Card title="WebView coordination" icon="globe" href="/developer/architecture/webview-coordination">
+    Understand lazy init, multi-window cloning, and BrowserConfig
+  </Card>
+</CardGroup>

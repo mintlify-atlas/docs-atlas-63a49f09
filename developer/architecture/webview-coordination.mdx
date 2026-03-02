@@ -1,0 +1,572 @@
+---
+title: WebView coordination
+description: Lazy initialization, multi-window cloning, and configuration management for WKWebView instances
+---
+
+Nook's WebView architecture supports **lazy initialization**, **multi-window coordination**, and **profile-based data isolation** through a sophisticated coordination layer.
+
+## Core concepts
+
+<CardGroup cols={2}>
+  <Card title="Lazy webview init" icon="hourglass">
+    Tabs exist without webviews until displayed, saving memory
+  </Card>
+  <Card title="Multi-window cloning" icon="clone">
+    Same tab shown in multiple windows gets separate webview instances
+  </Card>
+  <Card title="Profile isolation" icon="shield">
+    Each profile gets unique `WKWebsiteDataStore` for data separation
+  </Card>
+  <Card title="Config derivation" icon="diagram-project">
+    All webviews derive from shared `BrowserConfig` for extension support
+  </Card>
+</CardGroup>
+
+## Lazy webview initialization
+
+**Problem**: Loading all tab webviews at startup consumes too much memory and slows launch time.
+
+**Solution**: Tabs exist as lightweight `Tab` objects until their webview is actually needed (`Tab.swift:18`).
+
+### Pattern
+
+```swift
+@MainActor
+public class Tab: NSObject, Identifiable {
+    public let id: UUID
+    var url: URL
+    var name: String
+    
+    // Webview is NOT stored directly
+    private var _assignedWebView: WKWebView?
+    var assignedWindowId: UUID?
+    
+    // Lazy computed property
+    var webView: WKWebView {
+        get {
+            if let existing = _assignedWebView {
+                return existing
+            }
+            // Create webview on first access
+            let config = resolveWebViewConfiguration()
+            let webView = createWebView(configuration: config)
+            setupWebView(webView)
+            _assignedWebView = webView
+            return webView
+        }
+    }
+}
+```
+
+### Benefits
+
+- **Memory savings**: 200 tabs × ~30 MB/webview = 6 GB saved at startup
+- **Faster launch**: Only active tab webview is created initially
+- **On-demand loading**: Webviews created as user switches tabs
+
+### Lifecycle
+
+```
+Tab created (new tab, session restore)
+  ↓
+Tab exists with url, name, favicon (NO webview)
+  ↓
+User switches to tab / Tab becomes visible
+  ↓
+Tab.webView computed property accessed
+  ↓
+WebView created with profile-specific configuration
+  ↓
+WebView loads URL
+  ↓
+ExtensionManager notified (didOpenTab, didActivateTab)
+```
+
+## Multi-window webview coordination
+
+**Problem**: Same tab can be displayed in multiple windows simultaneously. Each window needs its own `WKWebView` instance (can't share a single view across NSWindows).
+
+**Solution**: `WebViewCoordinator` manages a pool of webviews indexed by `(tabId, windowId)` (`WebViewCoordinator.swift:14-16`).
+
+### Architecture
+
+```swift
+@MainActor
+@Observable
+class WebViewCoordinator {
+    // tabId → windowId → WKWebView
+    private var webViewsByTabAndWindow: [UUID: [UUID: WKWebView]] = [:]
+    
+    func getOrCreateWebView(
+        for tab: Tab,
+        in windowId: UUID,
+        tabManager: TabManager
+    ) -> WKWebView {
+        // 1. Return existing if this window already has webview for tab
+        if let existing = getWebView(for: tab.id, in: windowId) {
+            return existing
+        }
+        
+        // 2. Check if another window is displaying this tab
+        let otherWindows = webViewsByTabAndWindow[tab.id]?.filter { $0.key != windowId } ?? [:]
+        
+        if otherWindows.isEmpty {
+            // First window to show this tab → create PRIMARY webview
+            return createPrimaryWebView(for: tab, in: windowId)
+        } else {
+            // Another window already showing tab → create CLONE webview
+            return createCloneWebView(for: tab, in: windowId, primaryWindowId: otherWindows.first!.key)
+        }
+    }
+}
+```
+
+### Primary vs clone webviews
+
+**Primary webview** (`WebViewCoordinator.swift:135-145`):
+- First webview created for a tab
+- Owned by the tab: `tab.assignedWebView = webView`
+- Survives window closure if tab remains open
+- Registered with `WebViewCoordinator`
+
+**Clone webview** (`WebViewCoordinator.swift:149-180`):
+- Additional webview for multi-window display
+- NOT owned by tab (only tracked by coordinator)
+- Shares configuration with primary webview
+- Synced to primary's navigation state
+- Destroyed when its window closes
+
+### Creation flow
+
+```swift
+private func createPrimaryWebView(for tab: Tab, in windowId: UUID) -> WKWebView {
+    let config = BrowserConfiguration.shared.webViewConfiguration(for: tab.resolveProfile())
+    let webView = WKWebView(frame: .zero, configuration: config)
+    
+    // Set up delegates, load URL
+    setupWebView(webView, for: tab)
+    
+    // Register with coordinator
+    setWebView(webView, for: tab.id, in: windowId)
+    
+    // Assign to tab (primary ownership)
+    tab.assignWebViewToWindow(webView, windowId: windowId)
+    
+    return webView
+}
+
+private func createCloneWebView(
+    for tab: Tab,
+    in windowId: UUID,
+    primaryWindowId: UUID
+) -> WKWebView {
+    let config = BrowserConfiguration.shared.webViewConfiguration(for: tab.resolveProfile())
+    let webView = WKWebView(frame: .zero, configuration: config)
+    
+    // Clone setup
+    setupWebView(webView, for: tab)
+    
+    // Sync navigation state from primary
+    if let primaryWebView = getWebView(for: tab.id, in: primaryWindowId) {
+        syncNavigationState(from: primaryWebView, to: webView)
+    }
+    
+    // Register with coordinator (NOT owned by tab)
+    setWebView(webView, for: tab.id, in: windowId)
+    
+    return webView
+}
+```
+
+### Cleanup on window close
+
+```swift
+func cleanupWindow(_ windowId: UUID, tabManager: TabManager) {
+    for (tabId, windowWebViews) in webViewsByTabAndWindow {
+        if let webView = windowWebViews[windowId] {
+            // Remove this window's webview
+            webViewsByTabAndWindow[tabId]?.removeValue(forKey: windowId)
+            
+            // If this was the tab's assigned webview, clear it
+            if let tab = tabManager.tabs.first(where: { $0.id == tabId }),
+               tab.assignedWindowId == windowId {
+                tab.clearAssignedWebView()
+            }
+            
+            // Deallocate webview
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webView.stopLoading()
+        }
+    }
+}
+```
+
+## BrowserConfig: Shared configuration
+
+**Location**: `Nook/Models/BrowserConfig/BrowserConfig.swift:12`
+
+**Pattern**: Singleton that provides base `WKWebViewConfiguration`
+
+### Base configuration
+
+```swift
+class BrowserConfiguration {
+    static let shared = BrowserConfiguration()
+    
+    lazy var webViewConfiguration: WKWebViewConfiguration = {
+        let config = WKWebViewConfiguration()
+        
+        // Use default data store (overridden per profile)
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        
+        // JavaScript preferences
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = preferences
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        
+        // Media settings
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
+        config.preferences.isElementFullscreenEnabled = true
+        config.allowsAirPlayForMediaPlayback = true
+        
+        // User agent
+        config.applicationNameForUserAgent = "Version/26.0.1 Safari/605.1.15"
+        
+        // Web inspector
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        
+        // Extension controller set by ExtensionManager
+        // config.webExtensionController = ...
+        
+        return config
+    }()
+}
+```
+
+### Profile-specific derivation
+
+**Critical pattern** (`BrowserConfig.swift:92-102`): All webview configs MUST derive via `.copy()`.
+
+```swift
+func webViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
+    // CRITICAL: Copy from base config to inherit extension controller + process pool
+    let config = webViewConfiguration.copy() as! WKWebViewConfiguration
+    
+    // Fresh user content controller per tab (avoid cross-tab handler conflicts)
+    config.userContentController = freshUserContentController()
+    
+    // Use profile's isolated data store
+    config.websiteDataStore = profile.dataStore
+    
+    return config
+}
+```
+
+<Warning>
+  **Never** create a fresh `WKWebViewConfiguration()` and just set `.webExtensionController` on it. This breaks extension support because the config won't share the same process pool.
+  
+  **Always** derive from `BrowserConfiguration.shared.webViewConfiguration` via `.copy()`.
+</Warning>
+
+### Why copy() is required
+
+**Problem**: Extensions require all webviews to share the same `WKProcessPool` and internal WebKit state.
+
+**Solution chain** (`CLAUDE.md:97-101`):
+
+```
+BrowserConfig.shared.webViewConfiguration (base)
+  ↓ ExtensionManager sets .webExtensionController on it
+  ↓
+webViewConfiguration(for: profile) calls .copy()
+  ↓ Copies process pool + extension controller
+  ↓ Sets profile-specific data store
+  ↓
+Tab gets derived config
+  ↓
+WebView created with extension support
+```
+
+**Without `.copy()`**:
+```swift
+// ❌ WRONG - breaks extensions
+let config = WKWebViewConfiguration()
+config.websiteDataStore = profile.dataStore
+config.webExtensionController = extensionController  // Not enough!
+```
+
+**With `.copy()`**:
+```swift
+// ✅ CORRECT - preserves extension support
+let config = BrowserConfig.shared.webViewConfiguration.copy() as! WKWebViewConfiguration
+config.websiteDataStore = profile.dataStore
+// Extension controller + process pool automatically inherited
+```
+
+## Profile data isolation
+
+Each `Profile` owns a unique `WKWebsiteDataStore` (`Profile.swift:82-98`):
+
+### Persistent profiles
+
+```swift
+private static func createDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+    if #available(macOS 15.4, *) {
+        // Profile-specific persistent store
+        let store = WKWebsiteDataStore(forIdentifier: profileId)
+        
+        if !store.isPersistent {
+            print("⚠️ Data store is not persistent for profile: \(profileId)")
+        } else {
+            print("✅ Using persistent data store for profile \(profileId)")
+        }
+        
+        return store
+    } else {
+        // Fallback: shared default store on older macOS
+        return WKWebsiteDataStore.default()
+    }
+}
+```
+
+**Storage location**: `~/Library/WebKit/Nook/{profileId}/`
+
+**Isolated data**:
+- Cookies
+- localStorage / sessionStorage
+- IndexedDB
+- Cache
+- Service workers
+- WebSQL
+
+### Ephemeral profiles (incognito)
+
+```swift
+static func createEphemeral() -> Profile {
+    let profile = Profile(
+        id: UUID(),
+        name: "Incognito",
+        icon: "eye.slash",
+        dataStore: .nonPersistent()  // In-memory only
+    )
+    profile.isEphemeral = true
+    return profile
+}
+```
+
+**Behavior**:
+- All data stored in memory only
+- No disk persistence
+- Destroyed when incognito window closes
+- Each incognito window gets a separate ephemeral profile
+
+### Profile switching
+
+When user switches profiles, existing tabs' webviews must be recreated with new data store:
+
+```swift
+func switchProfile(_ newProfile: Profile, for windowState: BrowserWindowState) {
+    windowState.currentProfileId = newProfile.id
+    
+    // Recreate webviews for all visible tabs with new profile's data store
+    for tab in visibleTabs(in: windowState) {
+        // Clear old webview
+        if let oldWebView = webViewCoordinator.getWebView(for: tab.id, in: windowState.id) {
+            tab.clearAssignedWebView()
+            webViewCoordinator.removeWebView(for: tab.id, in: windowState.id)
+        }
+        
+        // Create new webview with new profile's config
+        let newConfig = BrowserConfig.shared.webViewConfiguration(for: newProfile)
+        let newWebView = WKWebView(frame: .zero, configuration: newConfig)
+        setupWebView(newWebView, for: tab)
+        
+        // Register new webview
+        webViewCoordinator.setWebView(newWebView, for: tab.id, in: windowState.id)
+        tab.assignWebViewToWindow(newWebView, windowId: windowState.id)
+        
+        // Reload URL
+        newWebView.load(URLRequest(url: tab.url))
+    }
+}
+```
+
+## Extension integration
+
+**Location**: `Nook/Managers/ExtensionManager/ExtensionManager.swift`
+
+### Extension controller setup
+
+```swift
+// ExtensionManager sets controller on base config
+func setupExtensionController() {
+    let controller = WKWebExtensionController(
+        configuration: .nonPersistent()  // Extensions use separate storage
+    )
+    
+    // Attach to base config
+    BrowserConfiguration.shared.webViewConfiguration.webExtensionController = controller
+    
+    // Load extensions
+    for extension in installedExtensions {
+        try? controller.load(extension.webExtension)
+    }
+}
+```
+
+### Tab notification flow
+
+```swift
+// Tab.setupWebView()
+func setupWebView(_ webView: WKWebView) {
+    self._assignedWebView = webView
+    webView.navigationDelegate = self
+    webView.uiDelegate = self
+    
+    // Notify extension system
+    if #available(macOS 15.4, *) {
+        ExtensionManager.shared.notifyTabOpened(self)
+        
+        if isActive {
+            ExtensionManager.shared.notifyTabActivated(self)
+        }
+        
+        didNotifyOpenToExtensions = true
+    }
+}
+```
+
+See [Extension system docs](/extensions/overview) for details.
+
+## WebView lifecycle patterns
+
+### Creation
+
+```swift
+// User switches to tab
+WindowView displays tab
+  ↓
+WebViewContainer requests webview
+  ↓
+WebViewCoordinator.getOrCreateWebView(for: tab, in: windowId)
+  ↓
+Check if window already has webview → return existing
+  ↓
+Check if other windows have webview → clone or create primary
+  ↓
+Derived config = BrowserConfig.shared.webViewConfiguration(for: profile)
+  ↓
+WKWebView(frame: .zero, configuration: derivedConfig)
+  ↓
+Setup delegates, load URL, notify extensions
+```
+
+### Reuse
+
+```swift
+// User switches away from tab, then back
+Tab webview already exists
+  ↓
+WebViewCoordinator.getWebView(for: tabId, in: windowId) → returns existing
+  ↓
+No new webview created (memory optimization)
+```
+
+### Cleanup
+
+```swift
+// Window closes
+WindowRegistry.unregister(windowId)
+  ↓
+WindowRegistry.onWindowClose?(windowId)
+  ↓
+WebViewCoordinator.cleanupWindow(windowId, tabManager: tabManager)
+  ↓
+For each tab shown in window:
+  ↓ Remove webview from coordinator pool
+  ↓ Clear tab.assignedWebView if this was primary
+  ↓ Deallocate webview (delegates = nil, stopLoading())
+```
+
+## Memory optimization strategies
+
+<Accordion title="Lazy initialization">
+  Only create webviews when tabs become visible. 200 hidden tabs = 0 webviews = 0 memory.
+</Accordion>
+
+<Accordion title="Webview unloading">
+  `CompositorManager` can unload webviews for tabs that haven't been viewed recently:
+  
+  ```swift
+  // After N minutes of inactivity
+  func unloadInactiveTabs() {
+      for tab in tabs where tab.lastViewedAt < threshold {
+          if let webView = tab.assignedWebView {
+              webView.stopLoading()
+              tab.clearAssignedWebView()
+              webViewCoordinator.removeWebView(for: tab.id, in: windowId)
+          }
+      }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Clone cleanup">
+  Clone webviews are immediately destroyed when their window closes (not kept alive like primary webviews).
+</Accordion>
+
+<Accordion title="Favicon caching">
+  Global LRU cache with disk persistence prevents re-downloading favicons (`Tab.swift:56-70`):
+  
+  ```swift
+  private static var faviconCache: [String: SwiftUI.Image] = [:]
+  private static var faviconCacheOrder: [String] = []  // LRU tracking
+  private static let faviconCacheMaxSize = 200
+  ```
+</Accordion>
+
+## Best practices
+
+<Note>
+  **Always derive configs via .copy()**
+  
+  Never create fresh `WKWebViewConfiguration()`. Always copy from `BrowserConfig.shared.webViewConfiguration`.
+</Note>
+
+<Note>
+  **Use WebViewCoordinator for multi-window tabs**
+  
+  Don't manually track webviews. Let `WebViewCoordinator` handle primary/clone logic.
+</Note>
+
+<Note>
+  **Clean up delegates on deallocation**
+  
+  Always set delegates to `nil` before releasing webviews to prevent crashes:
+  
+  ```swift
+  webView.navigationDelegate = nil
+  webView.uiDelegate = nil
+  webView.stopLoading()
+  ```
+</Note>
+
+<Note>
+  **Notify ExtensionManager after webview creation**
+  
+  Call `ExtensionManager.shared.notifyTabOpened(tab)` after setting up webview so extensions can inject content scripts.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Extension system" icon="puzzle-piece" href="/extensions/overview">
+    Learn how extensions integrate with webviews
+  </Card>
+  <Card title="State management" icon="arrows-rotate" href="/developer/architecture/state-management">
+    Understand state synchronization patterns
+  </Card>
+</CardGroup>

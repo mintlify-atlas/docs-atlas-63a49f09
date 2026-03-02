@@ -1,0 +1,539 @@
+---
+title: Tab manager
+description: Tab lifecycle, persistence, and organization in Nook Browser
+---
+
+The `TabManager` is responsible for managing the complete lifecycle of tabs in Nook, including creation, organization into spaces and folders, pinning, and atomic persistence using SwiftData.
+
+## Architecture
+
+TabManager is a `@MainActor` class that coordinates:
+
+- **Tab lifecycle**: Creation, activation, closure, and lazy WebView initialization
+- **Organization**: Spaces, folders, and pinned tabs (both global and space-level)
+- **Persistence**: Atomic snapshots via `PersistenceActor` with backup recovery
+- **Multi-window coordination**: Integration with WindowRegistry for per-window tab state
+
+```swift
+@MainActor
+class TabManager: ObservableObject {
+    weak var browserManager: BrowserManager?
+    private let context: ModelContext
+    private let persistence: PersistenceActor
+    
+    @Published var spaces: [Space] = []
+    @Published var currentSpace: Space?
+    @Published var tabsBySpace: [UUID: [Tab]] = [:]
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift`
+
+## Tab containers
+
+Tabs exist in one of three containers:
+
+### Global pinned tabs (Essentials)
+
+Profile-isolated tabs that appear across all spaces:
+
+```swift
+// Profile-filtered view
+var pinnedTabs: [Tab] {
+    guard let pid = browserManager?.currentProfile?.id else { return [] }
+    return Array(pinnedByProfile[pid] ?? []).sorted { $0.index < $1.index }
+}
+
+// Add tab to essentials
+func pinTab(_ tab: Tab) {
+    guard let pid = browserManager?.currentProfile?.id else { return }
+    removeFromCurrentContainer(tab)
+    tab.spaceId = nil
+    tab.isSpacePinned = false
+    tab.folderId = nil
+    tab.isPinned = true
+    // ... add to pinnedByProfile[pid]
+}
+```
+
+**Key invariants**:
+- `spaceId` must be `nil`
+- `isPinned = true`, `isSpacePinned = false`
+- Isolated per profile (stored in `pinnedByProfile[profileId]`)
+
+### Space-pinned tabs
+
+Pinned within a specific space, can be organized into folders:
+
+```swift
+private var spacePinnedTabs: [UUID: [Tab]] = [:]
+private var foldersBySpace: [UUID: [TabFolder]] = [:]
+
+func pinTabToSpace(_ tab: Tab, spaceId: UUID) {
+    tab.isSpacePinned = true
+    tab.spaceId = spaceId
+    var sp = spacePinnedTabs[spaceId] ?? []
+    sp.append(tab)
+    setSpacePinnedTabs(sp, for: spaceId)
+}
+```
+
+**Folders** group space-pinned tabs:
+```swift
+func createFolder(for spaceId: UUID, name: String = "New Folder") -> TabFolder {
+    let folder = TabFolder(name: name, spaceId: spaceId, ...)
+    var folders = foldersBySpace[spaceId] ?? []
+    folders.append(folder)
+    setFolders(folders, for: spaceId)
+    persistSnapshot()
+    return folder
+}
+```
+
+### Regular tabs
+
+Standard tabs within a space:
+
+```swift
+var tabsBySpace: [UUID: [Tab]] = [:]
+
+func addTab(_ tab: Tab) {
+    if tab.spaceId == nil {
+        tab.spaceId = currentSpace?.id
+    }
+    guard let sid = tab.spaceId else { return }
+    var arr = tabsBySpace[sid] ?? []
+    arr.append(tab)
+    setTabs(arr, for: sid)
+    persistSnapshot()
+}
+```
+
+## Atomic persistence with PersistenceActor
+
+TabManager uses a Swift `actor` to serialize all SwiftData writes and provide atomic snapshot saves with backup recovery.
+
+### Snapshot types
+
+```swift
+actor PersistenceActor {
+    struct Snapshot: Codable {
+        let spaces: [SnapshotSpace]
+        let tabs: [SnapshotTab]
+        let folders: [SnapshotFolder]
+        let state: SnapshotState
+    }
+    
+    struct SnapshotTab: Codable {
+        let id: UUID
+        let urlString: String
+        let name: String
+        let index: Int
+        let spaceId: UUID?
+        let isPinned: Bool
+        let isSpacePinned: Bool
+        let profileId: UUID?  // For global pinned tabs
+        let folderId: UUID?   // For folder membership
+        let currentURLString: String?
+        let canGoBack: Bool
+        let canGoForward: Bool
+    }
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:8-83`
+
+### Atomic transaction flow
+
+The actor ensures writes are atomic and recoverable:
+
+```swift
+func persist(snapshot: Snapshot, generation: Int) async -> Bool {
+    // 1. Coalesce stale generations
+    if generation < self.latestGeneration { return false }
+    
+    // 2. Backup current state to JSON
+    try createDataSnapshot(snapshot)
+    
+    // 3. Perform atomic write in child ModelContext
+    try await performAtomicPersistence(snapshot)
+    
+    // 4. On failure, try best-effort fallback
+    // 5. On total failure, recover from JSON backup
+}
+
+private func performAtomicPersistence(_ snapshot: Snapshot) async throws {
+    let ctx = ModelContext(container)
+    ctx.autosaveEnabled = false
+    
+    // Validate inputs
+    try validateInput(snapshot)
+    
+    // Upsert entities (tabs, spaces, folders)
+    // ...
+    
+    // Pre-save integrity check
+    try validateDataIntegrity(in: ctx, snapshot: snapshot)
+    
+    // Commit atomically
+    try ctx.save()
+    
+    // Post-save verification
+    try validateDataIntegrity(in: ctx, snapshot: snapshot)
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:89-203`
+
+### Validation rules
+
+The actor enforces strict invariants:
+
+```swift
+private func validateInput(_ snapshot: Snapshot) throws {
+    // Mutual exclusivity
+    for t in snapshot.tabs {
+        if t.isPinned && t.isSpacePinned {
+            throw PersistenceError.invalidModelState
+        }
+        // Global pinned cannot have spaceId
+        if t.isPinned && t.spaceId != nil {
+            throw PersistenceError.invalidModelState
+        }
+        // Space-pinned must have spaceId
+        if t.isSpacePinned && t.spaceId == nil {
+            throw PersistenceError.invalidModelState
+        }
+    }
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:346-371`
+
+<Note>
+The PersistenceActor maintains a lightweight JSON backup of the most recent snapshot in memory. On catastrophic failure, it can restore from this backup to prevent total data loss.
+</Note>
+
+## Spaces and profiles
+
+### Space creation
+
+Spaces are always assigned to a profile:
+
+```swift
+func createSpace(name: String, icon: String, gradient: SpaceGradient) -> Space {
+    // Always assign to current profile or default
+    let profileId = browserManager?.currentProfile?.id 
+                    ?? browserManager?.profileManager.profiles.first?.id
+    guard let profileId = profileId else {
+        fatalError("TabManager.createSpace requires at least one profile")
+    }
+    
+    let space = Space(name: name, icon: icon, gradient: gradient, profileId: profileId)
+    spaces.append(space)
+    setTabs([], for: space.id)
+    setSpacePinnedTabs([], for: space.id)
+    
+    createNewTab(in: space)  // Create initial tab
+    persistSnapshot()
+    return space
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:674-698`
+
+### Space activation
+
+Switching spaces preserves active tab state:
+
+```swift
+func setActiveSpace(_ space: Space) {
+    // 1. Remember active tab for outgoing space
+    if let prevSpace = currentSpace, let prevTab = currentTab {
+        prevSpace.activeTabId = prevTab.id
+    }
+    
+    // 2. Trigger gradient transition
+    browserManager?.refreshGradientsForSpace(space, animate: true)
+    
+    // 3. Switch to new space
+    currentSpace = space
+    
+    // 4. Restore last active tab for this space
+    var targetTab: Tab?
+    if let activeId = space.activeTabId {
+        targetTab = findTab(byId: activeId)  // Checks regular, space-pinned, global pinned
+    }
+    
+    // Fallback to first tab in space or global pinned
+    if targetTab == nil {
+        targetTab = tabsBySpace[space.id]?.first 
+                    ?? spacePinnedTabs[space.id]?.first 
+                    ?? pinnedTabs.first
+    }
+    
+    // 5. Update active tab and notify extensions
+    if targetTab?.id != currentTab?.id {
+        currentTab = targetTab
+        if #available(macOS 15.5, *), let newActive = currentTab {
+            ExtensionManager.shared.notifyTabActivated(newTab: newActive, previous: previousTab)
+        }
+    }
+    
+    persistSnapshot()
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:726-798`
+
+## Tab lifecycle operations
+
+### Creating tabs
+
+```swift
+func createNewTab(url: String = "https://www.google.com", in space: Space?) -> Tab {
+    let targetSpace = space ?? currentSpace ?? ensureDefaultSpaceIfNeeded()
+    
+    // Increment existing tab indices to insert at top
+    let existingTabs = tabsBySpace[targetSpace.id] ?? []
+    for tab in existingTabs {
+        tab.index += 1
+    }
+    
+    let newTab = Tab(
+        url: validURL,
+        name: "New Tab",
+        favicon: "globe",
+        spaceId: targetSpace.id,
+        index: 0,  // New tabs appear at top
+        browserManager: browserManager
+    )
+    
+    addTab(newTab)
+    setActiveTab(newTab)
+    return newTab
+}
+```
+
+**New tabs are inserted at index 0** (top of the list), and existing tabs are shifted down.
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:1147-1194`
+
+### Ephemeral tabs (Incognito)
+
+Incognito tabs are NOT persisted:
+
+```swift
+func createEphemeralTab(
+    url: URL,
+    in windowState: BrowserWindowState,
+    profile: Profile
+) -> Tab {
+    let newTab = Tab(
+        url: url,
+        name: url.host ?? "New Tab",
+        favicon: "globe",
+        spaceId: nil,  // No space assignment
+        index: 0,
+        browserManager: browserManager
+    )
+    newTab.profileId = profile.id
+    
+    // Add to window's ephemeral tabs (NOT persistent storage)
+    windowState.ephemeralTabs.append(newTab)
+    windowState.currentTabId = newTab.id
+    
+    return newTab
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:1200-1223`
+
+### Closing tabs
+
+```swift
+func removeTab(_ id: UUID) {
+    // Notify SplitViewManager to prevent zombie state
+    browserManager?.splitManager.handleTabClosure(id)
+    
+    // Find and remove from container
+    var removed: Tab?
+    for space in spaces {
+        if var arr = tabsBySpace[space.id], 
+           let i = arr.firstIndex(where: { $0.id == id }) {
+            removed = arr.remove(at: i)
+            setTabs(arr, for: space.id)
+            break
+        }
+    }
+    
+    // Track for undo (20 second window)
+    if let tab = removed {
+        trackRecentlyClosedTab(tab, spaceId: removedSpaceId)
+    }
+    
+    // Force unload from compositor
+    browserManager?.compositorManager.unloadTab(removed)
+    browserManager?.webViewCoordinator?.removeAllWebViews(for: removed)
+    
+    // Notify extension system
+    if #available(macOS 15.5, *) {
+        ExtensionManager.shared.notifyTabClosed(removed)
+    }
+    
+    persistSnapshot()
+}
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:949-1047`
+
+<Warning>
+Always call `removeTab(_:)` instead of directly manipulating tab arrays. This ensures proper cleanup of WebViews, compositor state, split view state, and extension notifications.
+</Warning>
+
+## Drag and drop operations
+
+The `handleDragOperation(_:)` method supports moving tabs between all container types:
+
+```swift
+enum DragContainer {
+    case essentials                    // Global pinned
+    case spacePinned(UUID)             // Space-pinned area
+    case spaceRegular(UUID)            // Regular tabs in space
+    case folder(UUID)                  // Folder within space
+    case none
+}
+
+struct DragOperation {
+    let tab: Tab
+    let fromContainer: DragContainer
+    let toContainer: DragContainer
+    let toIndex: Int
+}
+```
+
+**Example**: Moving from regular tab to essentials:
+
+```swift
+case (.spaceRegular(_), .essentials):
+    guard browserManager?.currentProfile?.id != nil else { return }
+    removeFromCurrentContainer(tab)
+    tab.spaceId = nil
+    withCurrentProfilePinnedArray { arr in
+        let safeIndex = max(0, min(operation.toIndex, arr.count))
+        arr.insert(tab, at: safeIndex)
+    }
+    persistSnapshot()
+```
+
+**Source**: `Nook/Managers/TabManager/TabManager.swift:1369-1610`
+
+## Integration with other systems
+
+### Extension system
+
+TabManager notifies the extension system on tab lifecycle events:
+
+```swift
+func addTab(_ tab: Tab) {
+    // ... add to container ...
+    
+    if #available(macOS 15.5, *) {
+        ExtensionManager.shared.notifyTabOpened(tab)
+    }
+}
+
+func setActiveTab(_ tab: Tab) {
+    let previous = currentTab
+    currentTab = tab
+    
+    if #available(macOS 15.5, *), let newActive = currentTab {
+        ExtensionManager.shared.notifyTabActivated(newTab: newActive, previous: previous)
+    }
+}
+```
+
+### WebViewCoordinator
+
+For multi-window support, TabManager coordinates with WebViewCoordinator:
+
+```swift
+// When removing a tab, clean up all window-specific WebViews
+func removeTab(_ id: UUID) {
+    // ...
+    browserManager?.webViewCoordinator?.removeAllWebViews(for: tab)
+}
+```
+
+### WindowRegistry
+
+TabManager validates window states after structural changes:
+
+```swift
+func removeSpace(_ id: UUID) {
+    // ... remove space and tabs ...
+    
+    // Validate all windows still have valid tab references
+    browserManager?.validateWindowStates()
+}
+```
+
+## Best practices
+
+<Accordion title="Always use container mutation helpers">
+Don't directly modify `tabsBySpace`, `spacePinnedTabs`, or `pinnedByProfile`. Use the setter methods:
+
+```swift
+// Good
+var arr = tabsBySpace[spaceId] ?? []
+arr.append(tab)
+setTabs(arr, for: spaceId)
+
+// Bad
+tabsBySpace[spaceId]?.append(tab)  // Won't trigger @Published
+```
+</Accordion>
+
+<Accordion title="Reindex after reordering">
+Always update tab indices after any reordering operation:
+
+```swift
+var arr = tabsBySpace[spaceId] ?? []
+arr.remove(at: oldIndex)
+arr.insert(tab, at: newIndex)
+
+// Reindex all tabs
+for (i, t) in arr.enumerated() {
+    t.index = i
+}
+setTabs(arr, for: spaceId)
+```
+</Accordion>
+
+<Accordion title="Profile assignment for global pinned">
+Global pinned tabs require a valid profile assignment:
+
+```swift
+func pinTab(_ tab: Tab) {
+    guard let pid = browserManager?.currentProfile?.id else { return }
+    // ... pin logic with pid ...
+}
+```
+</Accordion>
+
+<Accordion title="Persist after mutations">
+Always call `persistSnapshot()` after any state change:
+
+```swift
+func addTab(_ tab: Tab) {
+    // ... add logic ...
+    persistSnapshot()  // Critical!
+}
+```
+</Accordion>
+
+## Related systems
+
+- [Profile manager](/developer/systems/profile-manager) - Profile isolation and data stores
+- [Extension system](/developer/systems/extension-system) - Tab lifecycle notifications
+- [Window registry](/developer/systems/window-registry) - Multi-window coordination

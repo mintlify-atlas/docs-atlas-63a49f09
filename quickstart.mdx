@@ -1,80 +1,304 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with Nook Browser in under 5 minutes
 ---
 
-## Get started in three steps
+## Welcome to Nook
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through installing Nook, completing the initial setup, and starting your first browsing session.
 
-### Step 1: Set up your local environment
+## Install Nook
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+If you haven't already installed Nook, download and install it now:
 
-### Step 2: Deploy your changes
+<Card
+  title="Installation guide"
+  icon="download"
+  href="/installation"
+>
+  Download the DMG or build from source
+</Card>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## First launch
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+When you launch Nook for the first time, you'll see an onboarding flow that helps configure your browser.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Welcome screen">
+    The first screen introduces you to Nook's philosophy and design.
 
-### Step 3: Go live
+    Click **Continue** to proceed.
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Import data (optional)">
+    You can import bookmarks and history from:
+    - **Arc Browser**
+    - **Safari**
+    - **Dia Browser**
+
+    <Note>
+    Importing is optional. You can skip this step and start fresh, or import data later from Settings.
+    </Note>
+
+    Select your browser and follow the import flow, or click **Continue** to skip.
+  </Step>
+
+  <Step title="Configure AI assistant">
+    Nook includes a built-in AI chat assistant. Choose whether to enable it:
+
+    - **Enabled**: You'll see a chat panel where you can ask questions and get help
+    - **Disabled**: The AI features are hidden
+
+    You can configure the AI provider (Gemini, OpenRouter, or Ollama) later in Settings.
+  </Step>
+
+  <Step title="Enable ad blocking">
+    Nook offers cross-site tracking protection to enhance privacy.
+
+    - **Enabled**: Blocks cross-site trackers
+    - **Disabled**: Standard WebKit behavior
+
+    You can change this later in Settings > Privacy.
+  </Step>
+
+  <Step title="Choose URL bar position">
+    Select where you want the address bar:
+
+    - **Sidebar** (default): URL bar integrated into the sidebar for a unified navigation experience
+    - **Top bar**: Traditional top-aligned URL bar
+
+    <Note>
+    If you later switch to horizontal tabs (top of window), the URL bar will automatically move to the top.
+    </Note>
+  </Step>
+
+  <Step title="Pick a visual theme">
+    Customize the sidebar appearance by selecting a material effect:
+
+    - **Arc** (hudWindow): Similar to Arc Browser's aesthetic
+    - **Sidebar**: Standard macOS sidebar material
+    - **Window Background**: Subtle, minimal effect
+    - And many more options
+
+    This controls the visual blur and translucency of the sidebar.
+  </Step>
+
+  <Step title="Finish setup">
+    Click **Get Started** to complete onboarding and open your first tab.
+  </Step>
+</Steps>
+
+## Your first browsing session
+
+The Nook interface is organized into these key areas:
+
+1. **Sidebar** (left or right): Contains tabs organized into spaces and folders
+2. **URL bar**: Enter addresses or search queries
+3. **Web content area**: The active webpage
+4. **Status bar** (bottom): Shows link previews on hover
+
+### Open your first tab
+
+<Steps>
+  <Step title="Click the new tab button">
+    In the sidebar, click the **+** button to create a new tab.
+  </Step>
+
+  <Step title="Enter a URL or search">
+    Type a web address or search query in the URL bar:
+
+    ```
+    github.com/nook-browser/Nook
+    ```
+
+    Press **Enter** to navigate.
+  </Step>
+
+  <Step title="Browse the web">
+    The page loads in the content area. You can:
+
+    - **Click links** to navigate
+    - **⌘-click links** to open in a new tab
+    - **Hover over links** to preview them (if Peek is enabled)
+    - **Navigate back/forward** using the arrow buttons or ⌘[ / ⌘]
+  </Step>
+</Steps>
+
+## Essential features
+
+### Create a space
+
+Spaces help you organize tabs by context (work, personal, research, etc.).
+
+<Steps>
+  <Step title="Open the spaces sidebar">
+    At the bottom of the sidebar, click the **Spaces** button or press **⌘E**.
+  </Step>
+
+  <Step title="Create a new space">
+    Click the **+** icon to create a space.
+
+    Give it a name like "Work" or "Research".
+  </Step>
+
+  <Step title="Customize the space">
+    Right-click the space to:
+    - Change the gradient colors
+    - Rename it
+    - Delete it
+  </Step>
+
+  <Step title="Add tabs to the space">
+    Any new tabs you create will be added to the active space. Switch between spaces to context-switch your browsing.
+  </Step>
+</Steps>
+
+### Use the command palette
+
+The command palette provides keyboard-driven navigation.
+
+<Steps>
+  <Step title="Open the palette">
+    Press **⌘K** to open the command palette.
+  </Step>
+
+  <Step title="Search for tabs or history">
+    Start typing to search:
+    - **Tab names** to switch tabs
+    - **URLs** to navigate to recent pages
+    - **Commands** to execute actions
+  </Step>
+
+  <Step title="Navigate with keyboard">
+    - **↑ / ↓** to select
+    - **Enter** to activate
+    - **Esc** to close
+  </Step>
+</Steps>
+
+### Try split view
+
+View two tabs side-by-side in the same window.
+
+<Steps>
+  <Step title="Open two tabs">
+    Create or select two tabs you want to view simultaneously.
+  </Step>
+
+  <Step title="Activate split view">
+    Right-click a tab and select **Open in Split View**, or use the keyboard shortcut.
+  </Step>
+
+  <Step title="Resize the split">
+    Drag the divider between the two views to adjust sizing.
+  </Step>
+
+  <Step title="Exit split view">
+    Click the **X** button on either split panel to return to single-tab view.
+  </Step>
+</Steps>
+
+### Use profiles
+
+Profiles provide isolated browsing contexts with separate cookies, history, and cache.
+
+<Steps>
+  <Step title="Open Settings">
+    Press **⌘,** to open Settings.
+  </Step>
+
+  <Step title="Go to Profiles">
+    Navigate to the **Profiles** section.
+  </Step>
+
+  <Step title="Create a new profile">
+    Click **+** to create a profile.
+
+    Give it a name like "Work" or "Testing".
+  </Step>
+
+  <Step title="Switch profiles">
+    In the sidebar header, click the profile dropdown to switch between profiles.
+
+    Each profile has its own isolated data store.
+  </Step>
+</Steps>
+
+### Enable incognito mode
+
+Incognito windows use non-persistent storage that's destroyed when the window closes.
+
+<Steps>
+  <Step title="Open a new incognito window">
+    Press **⌘⇧N** or go to **File > New Incognito Window**.
+  </Step>
+
+  <Step title="Browse privately">
+    The window is marked with an incognito indicator.
+
+    History, cookies, and cache are not saved when you close the window.
+  </Step>
+</Steps>
+
+## Keyboard shortcuts
+
+Nook is designed for keyboard-driven workflows. Here are essential shortcuts:
+
+| Action | Shortcut |
+|--------|----------|
+| New tab | **⌘T** |
+| Close tab | **⌘W** |
+| Reopen closed tab | **⌘⇧T** |
+| Switch tabs | **⌘1-9** |
+| Command palette | **⌘K** |
+| Spaces sidebar | **⌘E** |
+| New window | **⌘N** |
+| New incognito window | **⌘⇧N** |
+| Find in page | **⌘F** |
+| Settings | **⌘,** |
+| Back / Forward | **⌘[** / **⌘]** |
+| Reload | **⌘R** |
+
+## Customize Nook
+
+Open **Settings** (⌘,) to customize:
+
+- **General**: Search engine, sidebar position, tab layout
+- **Appearance**: Visual materials, themes, UI density
+- **Privacy**: Tracking protection, cookie management
+- **Profiles**: Create and manage isolated browsing contexts
+- **Extensions**: Install and configure browser extensions (macOS 15.4+)
+- **AI**: Configure AI assistant providers and models
+- **Keyboard Shortcuts**: Customize and view all shortcuts
+
+## Get help
+
+If you encounter issues or have questions:
+
+<CardGroup cols={2}>
+  <Card
+    title="GitHub Issues"
+    icon="github"
+    href="https://github.com/nook-browser/Nook/issues"
+  >
+    Report bugs or request features
+  </Card>
+  <Card
+    title="Discord Community"
+    icon="discord"
+    href="https://discord.gg/J3XfPvg7Fs"
+  >
+    Ask questions and get support
+  </Card>
+</CardGroup>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+You're now ready to explore Nook's full feature set:
 
-<CardGroup cols={2}>
+- Learn about the **manager-based architecture** in the source code
+- Explore **extensions** and how to build your own
+- Contribute to the project on GitHub
+- Join the community and share feedback
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+Happy browsing!

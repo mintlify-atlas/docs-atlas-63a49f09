@@ -1,0 +1,660 @@
+---
+title: Extension system
+description: Deep dive on WKWebExtension integration, manifest patching, and native messaging
+---
+
+The extension system integrates `WKWebExtensionController` (macOS 15.4+) to support Chrome and Firefox extensions with MV2/MV3 manifests. This is the most complex subsystem in Nook.
+
+<Note>
+All extension code requires `@available(macOS 15.4, *)` guards. Content script injection specifically requires macOS 15.5+.
+</Note>
+
+## Architecture overview
+
+ExtensionManager is a singleton that coordinates:
+
+- **Installation**: Extract, validate, and patch manifests
+- **Lifecycle**: Load, enable, disable, uninstall
+- **Permission management**: Auto-grant at install (Chrome model)
+- **Storage isolation**: Per-profile data stores
+- **Delegate methods**: Popup positioning, tab/window creation, permission prompts
+- **Native messaging**: Host manifest lookup and protocol handling
+
+```swift
+@available(macOS 15.4, *)
+@MainActor
+final class ExtensionManager: NSObject, ObservableObject,
+    WKWebExtensionControllerDelegate, NSPopoverDelegate
+{
+    static let shared = ExtensionManager()
+    
+    @Published var installedExtensions: [InstalledExtension] = []
+    @Published var isExtensionSupportAvailable: Bool = false
+    @Published var extensionsLoaded: Bool = false
+    
+    private var extensionController: WKWebExtensionController?
+    private var extensionContexts: [String: WKWebExtensionContext] = [:]
+    private var tabAdapters: [UUID: ExtensionTabAdapter] = [:]
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift` (~3800 lines)
+
+## Critical: WebView configuration derivation
+
+Tab WebView configs **MUST** derive from the same `WKWebViewConfiguration` that the `WKWebExtensionController` was configured with.
+
+### The problem
+
+Creating a fresh `WKWebViewConfiguration()` and just setting `webExtensionController` on it is **NOT** enough:
+
+```swift
+// ❌ WRONG - Does not work!
+let config = WKWebViewConfiguration()
+config.webExtensionController = extensionController
+let webView = WKWebView(frame: .zero, configuration: config)
+```
+
+WebKit needs the config to share the same **process pool** and internal state as the controller's base configuration.
+
+### The solution
+
+Use `.copy()` to derive from the controller's configuration:
+
+```swift
+// ✅ CORRECT
+let sharedConfig = BrowserConfiguration.shared.webViewConfiguration
+sharedConfig.webExtensionController = extensionController
+
+// Tab configs derive from this base
+func webViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
+    let config = sharedConfig.copy() as! WKWebViewConfiguration
+    config.websiteDataStore = profile.websiteDataStore  // Profile-specific store
+    return config
+}
+```
+
+**The chain**:
+1. `BrowserConfiguration.shared.webViewConfiguration` (base)
+2. ExtensionManager sets `.webExtensionController` on it
+3. `webViewConfiguration(for: profile)` calls `.copy()` + sets profile data store
+4. Tab gets that derived config
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:129-175` and CLAUDE.md:97-100
+
+## Installation flow
+
+Supported formats: `.zip`, `.appex` (Safari extension bundle), `.app` (scans `Contents/PlugIns/` for `.appex`), bare directories.
+
+### Step-by-step installation
+
+```swift
+private func performInstallation(from sourceURL: URL) async throws -> InstalledExtension {
+    let extensionsDir = getExtensionsDirectory()  // ~/Library/Application Support/Nook/Extensions/
+    
+    // 1. Extract to temporary location
+    let tempId = UUID().uuidString
+    let tempDir = extensionsDir.appendingPathComponent("temp_\(tempId)")
+    
+    if sourceURL.pathExtension == "zip" {
+        try await extractZip(from: sourceURL, to: tempDir)
+    } else if sourceURL.pathExtension == "appex" {
+        let resourcesDir = try resolveSafariExtensionResources(at: sourceURL)
+        try FileManager.default.copyItem(at: resourcesDir, to: tempDir)
+    } else {
+        try FileManager.default.copyItem(at: sourceURL, to: tempDir)
+    }
+    
+    // 2. Validate manifest
+    let manifestURL = tempDir.appendingPathComponent("manifest.json")
+    let manifest = try ExtensionUtils.validateManifest(at: manifestURL)
+    
+    // 3. MV3 validation
+    if let manifestVersion = manifest["manifest_version"] as? Int, manifestVersion == 3 {
+        try validateMV3Requirements(manifest: manifest, baseURL: tempDir)
+    }
+    
+    // 4. Patch manifest for WebKit compatibility
+    patchManifestForWebKit(at: manifestURL)
+    
+    // 5. Create temporary WKWebExtension to get uniqueIdentifier
+    let tempExtension = try await WKWebExtension(resourceBaseURL: tempDir)
+    let tempContext = WKWebExtensionContext(for: tempExtension)
+    let extensionId = tempContext.uniqueIdentifier
+    
+    // 6. Move to final directory named by extension ID
+    let finalDestinationDir = extensionsDir.appendingPathComponent(extensionId)
+    if FileManager.default.fileExists(atPath: finalDestinationDir.path) {
+        try FileManager.default.removeItem(at: finalDestinationDir)
+    }
+    try FileManager.default.moveItem(at: tempDir, to: finalDestinationDir)
+    
+    // 7. Re-create WKWebExtension from final location
+    let webExtension = try await WKWebExtension(resourceBaseURL: finalDestinationDir)
+    let extensionContext = WKWebExtensionContext(for: webExtension)
+    configureContextIdentity(extensionContext, extensionId: extensionId)
+    
+    // 8. Grant ALL manifest permissions + host_permissions (Chrome behavior)
+    for p in webExtension.requestedPermissions {
+        extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+    }
+    for m in webExtension.allRequestedMatchPatterns {
+        extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+    }
+    
+    // 9. Enable Web Inspector
+    extensionContext.isInspectable = true
+    
+    // 10. Store context and load into controller
+    extensionContexts[extensionId] = extensionContext
+    
+    // 11. Set up externally_connectable bridge BEFORE loading background
+    setupExternallyConnectableBridge(
+        for: extensionContext,
+        extensionId: extensionId,
+        packagePath: finalDestinationDir.path
+    )
+    
+    try extensionController?.load(extensionContext)
+    
+    // 12. Load background service worker immediately
+    extensionContext.loadBackgroundContent { error in
+        if let error {
+            Self.logger.error("Background load failed: \(error.localizedDescription)")
+        } else {
+            Self.logger.info("Background content loaded for new extension")
+            self.probeBackgroundHealth(for: extensionContext, name: "new extension")
+        }
+    }
+    
+    // 13. Extract icon and locale strings
+    let icon = extractIcon(from: manifest, baseURL: finalDestinationDir)
+    let displayName = resolveLocaleString(manifest["name"], baseURL: finalDestinationDir)
+    
+    return InstalledExtension(
+        id: extensionId,
+        name: displayName ?? "Unknown",
+        icon: icon,
+        isEnabled: true
+    )
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:1467-1650`
+
+<Warning>
+The extension **MUST** be re-created from the final destination path (step 7). If you load the temporary extension, all resource URLs will point to the temp directory, causing runtime failures when the temp directory is cleaned up.
+</Warning>
+
+## Manifest patching for WebKit
+
+### Problem: ISOLATED world fetch() uses extension origin
+
+In Chrome MV3, content script `fetch()` uses the **page's origin**. In WebKit's ISOLATED world, `fetch()` uses the **extension's origin** (`webkit-extension://...`), causing:
+- CORS failures
+- Cookies not sent
+- Auth headers missing
+
+This breaks SSO/auth flows (e.g., Proton Pass fork session handoff).
+
+### Solution: Revert MAIN world patches
+
+Previous code incorrectly patched domain-specific content scripts to MAIN world, but MAIN world scripts **lose `browser.runtime` access** in WKWebExtension.
+
+The current implementation **reverts** any previous MAIN world patches:
+
+```swift
+private func patchManifestForWebKit(at manifestURL: URL) {
+    guard var manifest = loadManifest(at: manifestURL) else { return }
+    var changed = false
+    
+    // Revert previous MAIN-world patches on domain-specific content scripts
+    if var contentScripts = manifest["content_scripts"] as? [[String: Any]] {
+        for i in contentScripts.indices {
+            guard let world = contentScripts[i]["world"] as? String, world == "MAIN" else { continue }
+            guard let matches = contentScripts[i]["matches"] as? [String] else { continue }
+            let jsFiles = contentScripts[i]["js"] as? [String] ?? []
+            
+            // Don't touch our bridge
+            if jsFiles.contains("nook_bridge.js") { continue }
+            
+            // If ALL matches are domain-specific (no wildcard hosts), this was our patch
+            let allDomainSpecific = matches.allSatisfy { pattern in
+                // ... check if host is not "*" or "*.*" ...
+            }
+            
+            if allDomainSpecific {
+                contentScripts[i].removeValue(forKey: "world")
+                Self.logger.info("Reverted MAIN world on [\(jsFiles)] — restoring to ISOLATED")
+                changed = true
+            }
+        }
+        manifest["content_scripts"] = contentScripts
+    }
+    
+    if changed {
+        saveManifest(manifest, to: manifestURL)
+    }
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:955-990`
+
+### Externally connectable bridge injection
+
+If manifest has `externally_connectable`, inject bridge content script:
+
+```swift
+if let ec = manifest["externally_connectable"] as? [String: Any],
+   let matchPatterns = ec["matches"] as? [String], !matchPatterns.isEmpty {
+    
+    var contentScripts = manifest["content_scripts"] as? [[String: Any]] ?? []
+    
+    // Add or update nook_bridge.js entry
+    let bridgeEntry: [String: Any] = [
+        "all_frames": true,
+        "js": ["nook_bridge.js"],
+        "matches": matchPatterns,
+        "run_at": "document_start"
+    ]
+    contentScripts.append(bridgeEntry)
+    manifest["content_scripts"] = contentScripts
+    
+    // Write nook_bridge.js to extension directory
+    let bridgeFileURL = manifestURL.deletingLastPathComponent().appendingPathComponent("nook_bridge.js")
+    try? bridgeJS.write(to: bridgeFileURL, atomically: true, encoding: .utf8)
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:993-1294`
+
+## Externally connectable bridge
+
+### The problem
+
+Pages like `account.proton.me` call:
+```javascript
+browser.runtime.sendMessage(SAFARI_EXT_ID, msg)
+```
+
+But Safari extension IDs don't match WKWebExtension `uniqueIdentifier`.
+
+### The solution: Two-layer bridge
+
+**PAGE world script** (injected via `setupExternallyConnectableBridge`):
+- Wraps `browser.runtime.sendMessage()` and `.connect()`
+- Relays via `window.postMessage()` to ISOLATED world
+
+**ISOLATED world script** (`nook_bridge.js`):
+- Receives postMessages from PAGE world
+- Calls real `browser.runtime.sendMessage()` (has access to `browser.runtime`)
+- Forwards responses back via postMessage
+
+```javascript
+// PAGE world polyfill (simplified)
+function makeSendMessageWrapper(originalSendMessage) {
+    return function() {
+        var parsed = normalizeSendMessageArgs(arguments);
+        var shouldBridge = parsed.extensionId !== null || typeof originalSendMessage !== 'function';
+        
+        if (shouldBridge) {
+            return requestViaBridge(parsed);  // Relay to isolated world
+        } else {
+            return originalSendMessage.apply(this, arguments);
+        }
+    };
+}
+
+// ISOLATED world bridge (nook_bridge.js)
+function relaySendMessage(data) {
+    var outgoingMessage = data.message;
+    if (outgoingMessage && typeof outgoingMessage === 'object') {
+        outgoingMessage = Object.assign({ sender: 'page' }, outgoingMessage);
+    }
+    
+    runtimeAPI.sendMessage(outgoingMessage).then(function(response) {
+        window.postMessage({
+            type: 'nook_ec_response',
+            callbackId: data.callbackId,
+            response: response
+        }, '*');
+    });
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:186-767` and `Nook/Managers/ExtensionManager/ExtensionManager.swift:1033-1282`
+
+<Note>
+The bridge announces `nook_ec_bridge_ready` at document start and retries at 0ms, 100ms, 500ms to handle race conditions with page scripts.
+</Note>
+
+## Extension bridge adapters
+
+### ExtensionWindowAdapter
+
+Implements `WKWebExtensionWindow` to expose window state:
+
+```swift
+final class ExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
+    private unowned let browserManager: BrowserManager
+    
+    func activeTab(for extensionContext: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
+        if let t = browserManager.currentTabForActiveWindow(),
+           let a = ExtensionManager.shared.stableAdapter(for: t) {
+            return a
+        }
+        return nil
+    }
+    
+    func tabs(for extensionContext: WKWebExtensionContext) -> [any WKWebExtensionTab] {
+        let all = browserManager.tabManager.pinnedTabs + browserManager.tabManager.tabs
+        return all.compactMap { ExtensionManager.shared.stableAdapter(for: $0) }
+    }
+    
+    func isPrivate(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.currentTabForActiveWindow()?.isEphemeral ?? false
+    }
+    
+    func windowState(for extensionContext: WKWebExtensionContext) -> WKWebExtension.WindowState {
+        guard let window = NSApp.mainWindow else { return .normal }
+        if window.isMiniaturized { return .minimized }
+        if window.styleMask.contains(.fullScreen) { return .fullscreen }
+        return .normal
+    }
+}
+```
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionBridge.swift:14-150`
+
+### ExtensionTabAdapter
+
+Implements `WKWebExtensionTab` to expose tab state:
+
+```swift
+final class ExtensionTabAdapter: NSObject, WKWebExtensionTab {
+    internal let tab: Tab
+    private unowned let browserManager: BrowserManager
+    
+    func url(for extensionContext: WKWebExtensionContext) -> URL? {
+        return tab.url
+    }
+    
+    func isSelected(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.currentTabForActiveWindow()?.id == tab.id
+    }
+    
+    func isPinned(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.tabManager.pinnedTabs.contains(where: { $0.id == tab.id })
+    }
+    
+    func webView(for extensionContext: WKWebExtensionContext) -> WKWebView? {
+        // Use assignedWebView to avoid triggering lazy initialization
+        return tab.assignedWebView
+    }
+    
+    func activate(for extensionContext: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        browserManager.tabManager.setActiveTab(tab)
+        completionHandler(nil)
+    }
+}
+```
+
+**Stable adapters** are cached in `tabAdapters` dictionary by `Tab.id` to ensure identity consistency across extension API calls.
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionBridge.swift:152-273`
+
+<Warning>
+`webView(for:)` returns `tab.assignedWebView` (not `tab.webView`) to avoid triggering lazy WebView initialization. Extensions can only interact with tabs that are currently displayed in a window.
+</Warning>
+
+## Tab ↔ Extension notification
+
+Tabs notify the extension system after WebView creation:
+
+```swift
+// In Tab.swift
+func setupWebView() {
+    // ... create webView ...
+    
+    if #available(macOS 15.5, *) {
+        ExtensionManager.shared.notifyTabOpened(self)
+        if isActive {
+            ExtensionManager.shared.notifyTabActivated(newTab: self, previous: nil)
+        }
+        didNotifyOpenToExtensions = true
+    }
+}
+
+// In ExtensionManager.swift
+func notifyTabOpened(_ tab: Tab) {
+    guard let adapter = stableAdapter(for: tab) else { return }
+    extensionController?.didOpenTab(adapter)
+}
+
+func notifyTabActivated(newTab: Tab, previous: Tab?) {
+    guard let newAdapter = stableAdapter(for: newTab) else { return }
+    let prevAdapter = previous.flatMap { stableAdapter(for: $0) }
+    extensionController?.didActivateTab(newAdapter, previousActiveTab: prevAdapter)
+}
+```
+
+**Source**: CLAUDE.md:132-140
+
+## Permission model
+
+### Install-time auto-grant (Chrome behavior)
+
+```swift
+// Grant ALL manifest permissions + host_permissions
+for p in webExtension.requestedPermissions {
+    extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+}
+for m in webExtension.allRequestedMatchPatterns {
+    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+}
+```
+
+This matches Chrome's behavior: everything in `permissions` and `host_permissions` is auto-granted at install time. Only `optional_permissions` require runtime `chrome.permissions.request()`.
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:888-906`
+
+### Runtime permission prompts
+
+Implemented via delegate methods:
+
+```swift
+func webExtensionController(
+    _ controller: WKWebExtensionController,
+    promptForPermissions permissions: Set<String>,
+    for extensionContext: WKWebExtensionContext,
+    completionHandler: @escaping (Set<String>) -> Void
+) {
+    // Show ExtensionPermissionView
+    // User approves/denies
+    // Call completionHandler with granted set
+}
+```
+
+## Storage isolation per profile
+
+### Profile-specific data stores
+
+```swift
+private var profileExtensionStores: [UUID: WKWebsiteDataStore] = [:]
+
+private func getExtensionDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+    if let store = profileExtensionStores[profileId] {
+        return store
+    }
+    let store = WKWebsiteDataStore(forIdentifier: profileId)
+    profileExtensionStores[profileId] = store
+    return store
+}
+
+func switchProfile(_ profileId: UUID) {
+    guard let controller = extensionController else { return }
+    let store = getExtensionDataStore(for: profileId)
+    controller.configuration.defaultWebsiteDataStore = store
+    currentProfileId = profileId
+}
+```
+
+**This ensures**:
+- Extensions installed globally in `~/Library/Application Support/Nook/Extensions/{id}/`
+- Runtime storage (`chrome.storage.*`, cookies, IndexedDB) isolated per profile via separate data stores
+- On profile switch, `controller.configuration.defaultWebsiteDataStore` updated
+
+**Source**: `Nook/Managers/ExtensionManager/ExtensionManager.swift:791-812` and CLAUDE.md:149-153
+
+## Native messaging
+
+Looks up host manifests in order:
+1. `~/Library/Application Support/Nook/NativeMessagingHosts/`
+2. Chrome paths
+3. Chromium, Edge, Brave paths
+4. Mozilla paths
+
+**Protocol**: 4-byte native-endian length prefix + JSON payload.
+
+**Modes**:
+- **Single-shot**: Execute host binary, send message, wait for response (5s timeout)
+- **Long-lived**: `MessagePort` connection for bidirectional messaging
+
+**Source**: CLAUDE.md:156
+
+## Delegate methods
+
+### Action popup
+
+```swift
+func webExtensionController(
+    _ controller: WKWebExtensionController,
+    actionPopupFor action: WKWebExtensionAction,
+    for tab: WKWebExtensionTab?,
+    completionHandler: @escaping (WKWebView?) -> Void
+) {
+    // 1. Grant permissions for popup
+    // 2. Wake MV3 service worker
+    // 3. Create popup WebView
+    // 4. Position popover via registered anchor views
+    // 5. Return WebView to controller
+}
+```
+
+### Open tab/window
+
+```swift
+func webExtensionController(
+    _ controller: WKWebExtensionController,
+    tabsDidRequestNewTab options: WKWebExtensionContext.TabCreationOptions,
+    for extensionContext: WKWebExtensionContext,
+    completionHandler: @escaping (WKWebExtensionTab?) -> Void
+) {
+    // Create new tab with specified URL
+    // Handle OAuth popup flows
+    // Return tab adapter
+}
+```
+
+### Options page
+
+```swift
+func webExtensionController(
+    _ controller: WKWebExtensionController,
+    presentOptionsPageFor extensionContext: WKWebExtensionContext
+) {
+    // Resolve URL from manifest (options_ui.page / options_page)
+    // Open in separate NSWindow with extension's webViewConfiguration
+    // Path traversal protection
+}
+```
+
+**Source**: CLAUDE.md:158-165
+
+## Diagnostics
+
+### Background health probe
+
+```swift
+func probeBackgroundHealth(for extensionContext: WKWebExtensionContext, name: String) {
+    // Run at +3s and +8s after background load
+    // Use KVC to access _backgroundWebView
+    // Evaluate capability probe:
+    //   - Available APIs (chrome.tabs, chrome.storage, etc.)
+    //   - Granted permissions
+    //   - Runtime errors
+}
+```
+
+### Extension state diagnostics
+
+```swift
+func diagnoseExtensionState() {
+    // Full diagnostic on:
+    //   - Content scripts injection
+    //   - Messaging channels
+    //   - Permission status
+    //   - Data store availability
+}
+```
+
+**Memory debug logging** uses `🔍 [MEMDEBUG]` prefix.
+
+**Source**: CLAUDE.md:167-171
+
+## Best practices
+
+<Accordion title="Always derive WebView configs">
+Never create a fresh `WKWebViewConfiguration()` for tabs:
+
+```swift
+// ❌ WRONG
+let config = WKWebViewConfiguration()
+config.webExtensionController = extensionController
+
+// ✅ CORRECT
+let config = BrowserConfiguration.shared.webViewConfiguration.copy() as! WKWebViewConfiguration
+config.websiteDataStore = profile.websiteDataStore
+```
+</Accordion>
+
+<Accordion title="Re-create extension from final path">
+Always re-create `WKWebExtension` from the final destination directory after moving files:
+
+```swift
+// Move temp -> final
+try FileManager.default.moveItem(at: tempDir, to: finalDir)
+
+// Re-create from final location
+let webExtension = try await WKWebExtension(resourceBaseURL: finalDir)
+```
+</Accordion>
+
+<Accordion title="Use stable adapters">
+Cache tab adapters by `Tab.id` to ensure identity consistency:
+
+```swift
+func stableAdapter(for tab: Tab) -> ExtensionTabAdapter? {
+    if let existing = tabAdapters[tab.id] { return existing }
+    let adapter = ExtensionTabAdapter(tab: tab, browserManager: browserManager)
+    tabAdapters[tab.id] = adapter
+    return adapter
+}
+```
+</Accordion>
+
+<Accordion title="Avoid triggering lazy WebView init">
+Use `tab.assignedWebView` (not `tab.webView`) in adapters:
+
+```swift
+func webView(for extensionContext: WKWebExtensionContext) -> WKWebView? {
+    return tab.assignedWebView  // Does NOT trigger lazy init
+}
+```
+</Accordion>
+
+## Related systems
+
+- [Tab manager](/developer/systems/tab-manager) - Tab lifecycle notifications
+- [Profile manager](/developer/systems/profile-manager) - Extension storage isolation per profile
+- [Window registry](/developer/systems/window-registry) - Multi-window extension state

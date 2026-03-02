@@ -1,0 +1,452 @@
+---
+title: Profile manager
+description: Profile isolation, data stores, and ephemeral profiles in Nook
+---
+
+The `ProfileManager` handles creation and lifecycle of both persistent and ephemeral (incognito) profiles, ensuring complete data isolation via `WKWebsiteDataStore`.
+
+## Architecture
+
+ProfileManager is a `@MainActor` class that coordinates:
+
+- **Persistent profiles**: Stored in SwiftData, each with isolated `WKWebsiteDataStore`
+- **Ephemeral profiles**: One per incognito window, destroyed on close
+- **Profile switching**: Updates data stores across browser and extension systems
+
+```swift
+@MainActor
+final class ProfileManager: ObservableObject {
+    let context: ModelContext
+    @Published var profiles: [Profile] = []
+    
+    // Ephemeral profiles (one per incognito window)
+    private var ephemeralProfiles: [UUID: Profile] = [:]  // windowId -> profile
+}
+```
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift`
+
+## Persistent profiles
+
+### Loading from SwiftData
+
+Profiles are loaded at initialization:
+
+```swift
+func loadProfiles() {
+    do {
+        let descriptor = FetchDescriptor<ProfileEntity>(
+            sortBy: [SortDescriptor(\.index, order: .forward)]
+        )
+        let entities = try context.fetch(descriptor)
+        self.profiles = entities.map { e in
+            Profile(id: e.id, name: e.name, icon: e.icon)
+        }
+        // Normalize indices if not sequential 0..n-1
+        let expected = Array(0..<entities.count)
+        let actual = entities.map { $0.index }
+        if actual != expected { persistProfiles() }
+    } catch {
+        print("[ProfileManager] Failed to load profiles: \(error)")
+        self.profiles = []
+    }
+}
+```
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:27-44`
+
+### Creating profiles
+
+```swift
+@discardableResult
+func createProfile(name: String, icon: String = "person.crop.circle") -> Profile {
+    let nextIndex = profiles.count
+    let profile = Profile(name: name, icon: icon)
+    let entity = ProfileEntity(id: profile.id, name: name, icon: icon, index: nextIndex)
+    
+    context.insert(entity)
+    do { try context.save() } catch { 
+        print("[ProfileManager] Save failed during create: \(error)") 
+    }
+    
+    profiles.append(profile)
+    return profile
+}
+```
+
+**Each profile gets a unique `WKWebsiteDataStore`** identified by `profile.id`, providing complete isolation of cookies, localStorage, IndexedDB, and other web data.
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:47-57`
+
+### Deleting profiles
+
+```swift
+func deleteProfile(_ profile: Profile) -> Bool {
+    guard profiles.count > 1 else { return false }  // Prevent deleting last profile
+    
+    // Remove from SwiftData first
+    do {
+        let pid = profile.id
+        let predicate = #Predicate<ProfileEntity> { $0.id == pid }
+        if let entity = try context.fetch(FetchDescriptor<ProfileEntity>(predicate: predicate)).first {
+            context.delete(entity)
+        }
+        try context.save()
+    } catch {
+        print("[ProfileManager] Delete failed: \(error)")
+        return false
+    }
+    
+    // Remove from runtime and reindex
+    if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
+        profiles.remove(at: idx)
+    }
+    persistProfiles()
+    return true
+}
+```
+
+**Deleting a profile removes its SwiftData entity and destroys its `WKWebsiteDataStore`**, clearing all associated browsing data.
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:59-79`
+
+<Warning>
+Deleting a profile is irreversible. All browsing data (cookies, localStorage, history, etc.) associated with that profile is permanently destroyed.
+</Warning>
+
+### Persisting profile order
+
+```swift
+func persistProfiles() {
+    do {
+        // Fetch all existing entities
+        let all = try context.fetch(FetchDescriptor<ProfileEntity>())
+        var byId: [UUID: ProfileEntity] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        
+        // Update or insert to match runtime profiles order
+        for (index, p) in profiles.enumerated() {
+            if let e = byId[p.id] {
+                e.name = p.name
+                e.icon = p.icon
+                e.index = index
+            } else {
+                let e = ProfileEntity(id: p.id, name: p.name, icon: p.icon, index: index)
+                context.insert(e)
+                byId[p.id] = e
+            }
+        }
+        
+        // Remove entities not present in runtime array
+        let keep = Set(profiles.map { $0.id })
+        for (id, e) in byId where !keep.contains(id) { 
+            context.delete(e) 
+        }
+        
+        try context.save()
+    } catch {
+        print("[ProfileManager] Persist failed: \(error)")
+    }
+}
+```
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:81-106`
+
+## Ephemeral profiles (Incognito)
+
+Ephemeral profiles use `WKWebsiteDataStore.nonPersistent()` and are destroyed when the incognito window closes.
+
+### Creating ephemeral profiles
+
+```swift
+func createEphemeralProfile(for windowId: UUID) -> Profile {
+    let profile = Profile.createEphemeral()
+    ephemeralProfiles[windowId] = profile
+    print("🔒 [ProfileManager] Created ephemeral profile for window: \(windowId)")
+    return profile
+}
+```
+
+**The `Profile.createEphemeral()` factory method** creates a profile with:
+- `isEphemeral = true`
+- Non-persistent `WKWebsiteDataStore`
+- Unique identifier not stored in SwiftData
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:117-122`
+
+### Profile model implementation
+
+```swift
+@Observable
+class Profile: Identifiable {
+    let id: UUID
+    var name: String
+    var icon: String
+    var isEphemeral: Bool = false
+    
+    private var dataStore: WKWebsiteDataStore?
+    
+    var websiteDataStore: WKWebsiteDataStore {
+        if let store = dataStore { return store }
+        
+        if isEphemeral {
+            let store = WKWebsiteDataStore.nonPersistent()
+            dataStore = store
+            return store
+        } else {
+            let store = WKWebsiteDataStore(forIdentifier: id)
+            dataStore = store
+            return store
+        }
+    }
+    
+    static func createEphemeral() -> Profile {
+        let profile = Profile(name: "Incognito", icon: "eye.slash")
+        profile.isEphemeral = true
+        return profile
+    }
+}
+```
+
+**Key properties**:
+- **Persistent profiles**: `WKWebsiteDataStore(forIdentifier: profile.id)` creates a stable, on-disk data store
+- **Ephemeral profiles**: `WKWebsiteDataStore.nonPersistent()` creates an in-memory store
+
+### Destroying ephemeral profiles
+
+When an incognito window closes:
+
+```swift
+func removeEphemeralProfile(for windowId: UUID) async {
+    guard let profile = ephemeralProfiles[windowId] else { return }
+    
+    print("🔒 [ProfileManager] Removing ephemeral profile: \(profile.id) for window: \(windowId)")
+    
+    // Remove from tracking immediately
+    ephemeralProfiles.removeValue(forKey: windowId)
+    
+    // Destroy the data store with timeout protection
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        var resumed = false
+        let resumeSafely: () -> Void = {
+            guard !resumed else { return }
+            resumed = true
+            continuation.resume()
+        }
+        
+        // Timeout after 5 seconds
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if !resumed {
+                print("⚠️ [ProfileManager] Timeout destroying ephemeral data store")
+                resumeSafely()
+            }
+        }
+        
+        profile.destroyEphemeralDataStore {
+            resumeSafely()
+        }
+    }
+    
+    print("🔒 [ProfileManager] Ephemeral profile removed: \(profile.id)")
+}
+```
+
+**This ensures**:
+1. Profile is removed from tracking
+2. Data store is destroyed (async with 5s timeout)
+3. All browsing data is purged from memory
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:125-158`
+
+<Note>
+Ephemeral data stores are destroyed asynchronously via `WKWebsiteDataStore.removeData()`. The timeout protection prevents window close operations from hanging if WebKit's cleanup is slow.
+</Note>
+
+## WKWebsiteDataStore isolation
+
+### How isolation works
+
+Each profile has a unique `WKWebsiteDataStore` that isolates:
+
+- **HTTP cookies** and session state
+- **localStorage** and sessionStorage
+- **IndexedDB** databases
+- **Service workers** and cache storage
+- **WebSQL** (deprecated but still isolated)
+- **Application cache**
+
+```swift
+// In BrowserConfig.swift
+func webViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
+    let config = webViewConfiguration.copy() as! WKWebViewConfiguration
+    config.websiteDataStore = profile.websiteDataStore
+    return config
+}
+```
+
+**WebViews created with different profiles cannot access each other's data**, even if viewing the same website.
+
+### Extension storage isolation
+
+Extensions also use profile-specific data stores:
+
+```swift
+// In ExtensionManager.swift
+private func getExtensionDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+    if let store = profileExtensionStores[profileId] {
+        return store
+    }
+    let store = WKWebsiteDataStore(forIdentifier: profileId)
+    profileExtensionStores[profileId] = store
+    return store
+}
+
+func switchProfile(_ profileId: UUID) {
+    guard let controller = extensionController else { return }
+    let store = getExtensionDataStore(for: profileId)
+    controller.configuration.defaultWebsiteDataStore = store
+    currentProfileId = profileId
+}
+```
+
+This means:
+- Extension `chrome.storage.*` data is isolated per profile
+- Extension cookies are isolated per profile
+- Extension IndexedDB is isolated per profile
+
+**Source**: See [Extension system](/developer/systems/extension-system) for details
+
+## Profile switching flow
+
+When the user switches profiles, multiple systems coordinate:
+
+```swift
+// 1. BrowserManager triggers the switch
+func switchProfile(_ profile: Profile) {
+    currentProfile = profile
+    
+    // 2. Update extension data store
+    if #available(macOS 15.4, *) {
+        ExtensionManager.shared.switchProfile(profile.id)
+    }
+    
+    // 3. Reload tabs to use new profile's data store
+    for tab in tabManager.allTabs() {
+        tab.reloadWithProfile(profile)
+    }
+    
+    // 4. Update window states
+    for (_, windowState) in windowRegistry?.windows ?? [:] {
+        windowState.profileId = profile.id
+    }
+}
+```
+
+**Key steps**:
+1. `ExtensionManager` updates `controller.configuration.defaultWebsiteDataStore`
+2. Tabs are reloaded with new `WKWebViewConfiguration` using the new profile's data store
+3. Window states are updated to track the active profile
+
+## Ensuring a default profile
+
+```swift
+func ensureDefaultProfile() {
+    if profiles.isEmpty {
+        _ = createProfile(name: "Default", icon: "person.crop.circle")
+    }
+}
+```
+
+**Called during app initialization** to ensure at least one profile exists.
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:108-112`
+
+## Profile queries
+
+```swift
+func ephemeralProfile(for windowId: UUID) -> Profile? {
+    return ephemeralProfiles[windowId]
+}
+
+func isEphemeralProfile(_ profileId: UUID) -> Bool {
+    return ephemeralProfiles.values.contains { $0.id == profileId }
+}
+```
+
+**Source**: `Nook/Managers/ProfileManager/ProfileManager.swift:160-168`
+
+## Integration with TabManager
+
+TabManager associates spaces and global pinned tabs with profiles:
+
+```swift
+// In TabManager
+func createSpace(name: String, icon: String, gradient: SpaceGradient) -> Space {
+    let profileId = browserManager?.currentProfile?.id 
+                    ?? browserManager?.profileManager.profiles.first?.id
+    guard let profileId = profileId else {
+        fatalError("TabManager.createSpace requires at least one profile")
+    }
+    let space = Space(name: name, icon: icon, gradient: gradient, profileId: profileId)
+    // ...
+}
+
+// Global pinned tabs are stored per profile
+var pinnedTabs: [Tab] {
+    guard let pid = browserManager?.currentProfile?.id else { return [] }
+    return Array(pinnedByProfile[pid] ?? []).sorted { $0.index < $1.index }
+}
+```
+
+See [Tab manager](/developer/systems/tab-manager) for details on profile-tab associations.
+
+## Best practices
+
+<Accordion title="Always check for ephemeral status">
+Before persisting profile-related data, check if the profile is ephemeral:
+
+```swift
+if !profile.isEphemeral {
+    // Safe to persist
+    persistProfileSettings(profile)
+}
+```
+</Accordion>
+
+<Accordion title="Use async cleanup for ephemeral profiles">
+Always await ephemeral profile cleanup to ensure data is destroyed:
+
+```swift
+Task {
+    await profileManager.removeEphemeralProfile(for: windowId)
+    // Now safe to close window
+}
+```
+</Accordion>
+
+<Accordion title="Prevent deleting the last profile">
+The UI should disable profile deletion when only one profile remains:
+
+```swift
+let canDelete = profileManager.profiles.count > 1
+```
+</Accordion>
+
+<Accordion title="Profile switching requires tab reload">
+After switching profiles, tabs must be reloaded to pick up the new data store:
+
+```swift
+func switchProfile(_ profile: Profile) {
+    currentProfile = profile
+    for tab in tabManager.allTabs() {
+        tab.reloadWebView()  // Critical: Apply new data store
+    }
+}
+```
+</Accordion>
+
+## Related systems
+
+- [Tab manager](/developer/systems/tab-manager) - Profile-space associations and global pinned tabs
+- [Extension system](/developer/systems/extension-system) - Extension storage isolation per profile
+- [Window registry](/developer/systems/window-registry) - Incognito window tracking

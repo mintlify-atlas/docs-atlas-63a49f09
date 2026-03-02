@@ -1,0 +1,489 @@
+---
+title: Managers
+description: Deep dive into Nook's manager-based architecture and individual manager responsibilities
+---
+
+Nook uses **specialized managers** for each feature domain. Each manager owns the business logic, state, and coordination for its area of responsibility.
+
+## Manager pattern overview
+
+Managers in Nook follow these principles:
+
+<CardGroup cols={2}>
+  <Card title="Single responsibility" icon="bullseye">
+    Each manager handles one feature domain (tabs, profiles, extensions, etc.)
+  </Card>
+  <Card title="Observable state" icon="eye">
+    Managers expose state via `@Observable` or `@Published` for reactive UI updates
+  </Card>
+  <Card title="MainActor confinement" icon="lock">
+    All managers are `@MainActor` for thread-safe UI interaction
+  </Card>
+  <Card title="Environment injection" icon="plug">
+    Managers are injected via SwiftUI environment, not global singletons (goal)
+  </Card>
+</CardGroup>
+
+## Manager directory
+
+Nook has 27 managers in `Nook/Managers/`:
+
+### Core managers
+
+<AccordionGroup>
+  <Accordion title="BrowserManager" icon="browser">
+    **Location**: `Nook/Managers/BrowserManager/BrowserManager.swift:18`
+    
+    **Status**: Legacy "god object" (~2800 lines) being refactored
+    
+    **Responsibilities**:
+    - Central coordinator that connects all other managers
+    - Owns TabManager, ProfileManager, ExtensionManager, etc.
+    - Routes commands from menu bar and keyboard shortcuts
+    - Handles window lifecycle and state synchronization
+    
+    **Pattern**: `ObservableObject` with `@Published` properties (Combine)
+    
+    **Refactoring plan**: Eliminate by making managers independent and environment-injected
+    
+    ```swift
+    @MainActor
+    final class BrowserManager: ObservableObject {
+        let tabManager: TabManager
+        let profileManager: ProfileManager
+        let extensionManager: ExtensionManager
+        // ... ~30 manager properties
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="TabManager" icon="folder-tree">
+    **Location**: `Nook/Managers/TabManager/TabManager.swift`
+    
+    **Responsibilities**:
+    - Tab lifecycle (create, close, reorder, pin)
+    - Space organization and active tab tracking
+    - Folder management within spaces
+    - Atomic persistence via `PersistenceActor`
+    - Session restoration from SwiftData
+    
+    **Key features**:
+    - Coalesced writes to prevent excessive I/O
+    - Backup/recovery on persistence failure
+    - Global pinned tabs (essentials) vs space-pinned tabs
+    
+    ```swift
+    // TabManager.swift:12
+    actor PersistenceActor {
+        func persist(snapshot: Snapshot, generation: Int) async -> Bool
+    }
+    ```
+    
+    **Pattern**: Uses Swift actor for thread-safe persistence
+  </Accordion>
+
+  <Accordion title="ProfileManager" icon="user">
+    **Location**: `Nook/Managers/ProfileManager/ProfileManager.swift:13`
+    
+    **Responsibilities**:
+    - Manage persistent profiles (each with isolated `WKWebsiteDataStore`)
+    - Create/delete/rename profiles
+    - Handle ephemeral/incognito profiles (non-persistent data stores)
+    - Profile switching and data isolation
+    
+    **Key features**:
+    - Each profile gets a unique `WKWebsiteDataStore(forIdentifier: profileId)`
+    - Ephemeral profiles use `WKWebsiteDataStore.nonPersistent()`
+    - Prevents deletion of last profile
+    
+    ```swift
+    // ProfileManager.swift:18-19
+    @Published var profiles: [Profile] = []
+    private var ephemeralProfiles: [UUID: Profile] = [:] // windowId -> profile
+    ```
+  </Accordion>
+
+  <Accordion title="WindowRegistry" icon="window">
+    **Location**: `Nook/Managers/WindowRegistry/WindowRegistry.swift:14`
+    
+    **Responsibilities**:
+    - Track all open browser windows
+    - Maintain active (focused) window state
+    - Coordinate window lifecycle (register, unregister, activate)
+    - Provide callbacks for window events
+    
+    **Pattern**: `@Observable` with callbacks for lifecycle events
+    
+    ```swift
+    @MainActor
+    @Observable
+    class WindowRegistry {
+        var windows: [UUID: BrowserWindowState] = [:]
+        var activeWindowId: UUID?
+        
+        var onWindowClose: ((UUID) -> Void)?
+        var onWindowRegister: ((BrowserWindowState) -> Void)?
+        var onActiveWindowChange: ((BrowserWindowState) -> Void)?
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="WebViewCoordinator" icon="globe">
+    **Location**: `Nook/Managers/WebViewCoordinator/WebViewCoordinator.swift:14`
+    
+    **Responsibilities**:
+    - Manage webview instances across multiple windows
+    - Coordinate primary vs clone webviews for multi-window tabs
+    - Prevent duplicate webview creation
+    - Clean up webviews when windows close
+    
+    **Key algorithm** (`WebViewCoordinator.swift:96-131`):
+    1. If tab not shown in any window → create **primary** webview
+    2. If tab already shown elsewhere → create **clone** webview
+    3. If window already has webview for tab → return existing
+    
+    ```swift
+    // WebViewCoordinator.swift:16
+    private var webViewsByTabAndWindow: [UUID: [UUID: WKWebView]] = [:]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Feature managers
+
+<AccordionGroup>
+  <Accordion title="ExtensionManager" icon="puzzle-piece">
+    **Location**: `Nook/Managers/ExtensionManager/ExtensionManager.swift`
+    
+    **Responsibilities**:
+    - `WKWebExtensionController` integration (macOS 15.4+)
+    - Extension installation, loading, updating
+    - Permission management (install-time and runtime)
+    - Native messaging host integration
+    - Extension bridge for `chrome.*` APIs
+    
+    **Pattern**: Singleton (required for WebKit integration)
+    
+    **Complexity**: ~3800 lines, most complex manager
+    
+    See [Extension system docs](/extensions/overview) for details.
+  </Accordion>
+
+  <Accordion title="HistoryManager" icon="clock-rotate-left">
+    **Location**: `Nook/Managers/HistoryManager/HistoryManager.swift`
+    
+    **Responsibilities**:
+    - Track browsing history per profile
+    - Persist history entries to SwiftData (`HistoryEntity`)
+    - Search history by title/URL
+    - Clear history with date filters
+  </Accordion>
+
+  <Accordion title="DownloadManager" icon="download">
+    **Location**: `Nook/Managers/DownloadManager/DownloadManager.swift`
+    
+    **Responsibilities**:
+    - Handle `WKDownloadDelegate` callbacks
+    - Track active downloads
+    - Provide download progress UI
+    - Manage download destination paths
+  </Accordion>
+
+  <Accordion title="CookieManager" icon="cookie-bite">
+    **Location**: `Nook/Managers/CookieManager/CookieManager.swift`
+    
+    **Responsibilities**:
+    - Cookie inspection and management
+    - Clear cookies per profile or globally
+    - Export/import cookie data
+  </Accordion>
+
+  <Accordion title="CacheManager" icon="hard-drive">
+    **Location**: `Nook/Managers/CacheManager/CacheManager.swift`
+    
+    **Responsibilities**:
+    - Manage `WKWebsiteDataStore` cache
+    - Clear cache per profile
+    - Calculate cache size estimates
+  </Accordion>
+
+  <Accordion title="SearchManager" icon="magnifying-glass">
+    **Location**: `Nook/Managers/SearchManager/SearchManager.swift`
+    
+    **Responsibilities**:
+    - Handle search engine configuration
+    - Parse search queries vs URLs in address bar
+    - Provide autocomplete suggestions
+  </Accordion>
+
+  <Accordion title="DialogManager" icon="message-lines">
+    **Location**: `Nook/Managers/DialogManager/DialogManager.swift`
+    
+    **Responsibilities**:
+    - Show system dialogs (alerts, confirmations)
+    - Manage dialog queue and presentation
+    - Handle basic auth prompts
+  </Accordion>
+
+  <Accordion title="FindManager" icon="text-size">
+    **Location**: `Nook/Managers/FindManager/FindManager.swift`
+    
+    **Responsibilities**:
+    - In-page search (find bar)
+    - Highlight matches
+    - Navigate between results
+  </Accordion>
+
+  <Accordion title="ZoomManager" icon="magnifying-glass-plus">
+    **Location**: `Nook/Managers/ZoomManager/ZoomManager.swift`
+    
+    **Responsibilities**:
+    - Track zoom levels per tab
+    - Apply zoom presets
+    - Persist zoom preferences
+  </Accordion>
+
+  <Accordion title="SplitViewManager" icon="table-columns">
+    **Location**: `Nook/Managers/SplitViewManager/SplitViewManager.swift`
+    
+    **Responsibilities**:
+    - Manage split-screen tab viewing
+    - Coordinate primary/secondary pane state
+    - Clean up split state on window close
+  </Accordion>
+</AccordionGroup>
+
+### UI managers
+
+<AccordionGroup>
+  <Accordion title="GradientColorManager" icon="palette">
+    **Location**: `Nook/Managers/GradientColorManager/GradientColorManager.swift`
+    
+    **Responsibilities**:
+    - Manage space gradient themes
+    - Generate gradient animations
+    - Persist gradient configurations
+  </Accordion>
+
+  <Accordion title="HoverSidebarManager" icon="sidebar">
+    **Location**: `Nook/Managers/HoverSidebarManager/HoverSidebarManager.swift`
+    
+    **Responsibilities**:
+    - Detect mouse hover at screen edge
+    - Show/hide sidebar with animation
+    - Track hover state per window
+  </Accordion>
+
+  <Accordion title="PeekManager" icon="eye">
+    **Location**: `Nook/Managers/PeekManager/PeekManager.swift`
+    
+    **Responsibilities**:
+    - Show link preview overlays (Option + hover)
+    - Manage peek webview lifecycle
+    - Handle peek-to-tab conversion
+  </Accordion>
+
+  <Accordion title="DragManager" icon="hand">
+    **Location**: `Nook/Managers/DragManager/TabDragManager.swift`
+    
+    **Responsibilities**:
+    - Handle tab drag-and-drop
+    - Reorder tabs within spaces
+    - Move tabs between spaces and windows
+  </Accordion>
+</AccordionGroup>
+
+### Specialized managers
+
+<AccordionGroup>
+  <Accordion title="AIManager" icon="robot">
+    **Location**: `Nook/Managers/AIManager/AIService.swift`
+    
+    **Responsibilities**:
+    - AI chat integration (OpenAI, Gemini, Ollama, OpenRouter)
+    - MCP (Model Context Protocol) server management
+    - Browser tool execution for AI actions
+  </Accordion>
+
+  <Accordion title="KeyboardShortcutManager" icon="keyboard">
+    **Location**: `Nook/Managers/KeyboardShortcutManager/KeyboardShortcutManager.swift`
+    
+    **Responsibilities**:
+    - Global keyboard shortcut registration
+    - Command routing to managers
+    - Conflict detection and warnings
+  </Accordion>
+
+  <Accordion title="AuthenticationManager" icon="shield">
+    **Location**: `Nook/Managers/AuthenticationManager/AuthenticationManager.swift`
+    
+    **Responsibilities**:
+    - HTTP basic auth credential storage
+    - WebAuthn/Passkey integration
+    - Credential prompt handling
+  </Accordion>
+
+  <Accordion title="ImportManager" icon="file-import">
+    **Location**: `Nook/Managers/ImportManager/ImportManager.swift`
+    
+    **Responsibilities**:
+    - Import bookmarks/history from Safari, Chrome, Firefox
+    - Parse browser export formats
+    - Merge imported data with existing tabs/spaces
+  </Accordion>
+
+  <Accordion title="PrivacyManager" icon="user-secret">
+    **Location**: `Nook/Managers/PrivacyManager/PrivacyManager.swift`
+    
+    **Responsibilities**:
+    - Configure tracking protection
+    - Manage content blockers
+    - Handle privacy-related WebKit settings
+  </Accordion>
+</AccordionGroup>
+
+## BrowserManager as coordinator
+
+`BrowserManager` currently acts as the glue between all managers:
+
+```swift
+// BrowserManager.swift (simplified)
+@MainActor
+final class BrowserManager: ObservableObject {
+    // Core managers
+    let tabManager: TabManager
+    let profileManager: ProfileManager
+    let extensionManager: ExtensionManager
+    let historyManager: HistoryManager
+    
+    // UI managers
+    let dialogManager: DialogManager
+    let findManager: FindManager
+    let zoomManager: ZoomManager
+    let splitManager: SplitViewManager
+    let gradientColorManager: GradientColorManager
+    
+    // Specialized managers
+    let downloadManager: DownloadManager
+    let cookieManager: CookieManager
+    let cacheManager: CacheManager
+    let searchManager: SearchManager
+    
+    // Coordinators (temporary)
+    var webViewCoordinator: WebViewCoordinator?
+    var windowRegistry: WindowRegistry?
+    
+    // Commands route through BrowserManager
+    func createNewTab() {
+        tabManager.createTab(...)
+    }
+    
+    func switchProfile(_ profile: Profile) {
+        profileManager.setActiveProfile(profile)
+    }
+}
+```
+
+### Refactoring roadmap
+
+The goal is to eliminate `BrowserManager` by making managers independent:
+
+**Before (current)**:
+```swift
+@EnvironmentObject var browserManager: BrowserManager
+browserManager.tabManager.createTab(...)
+browserManager.profileManager.switchProfile(...)
+```
+
+**After (target)**:
+```swift
+@Environment(TabManager.self) private var tabManager
+@Environment(ProfileManager.self) private var profileManager
+
+tabManager.createTab(...)
+profileManager.switchProfile(...)
+```
+
+This requires:
+1. Migrating all managers to `@Observable` (Swift Observation)
+2. Removing cross-manager dependencies where possible
+3. Using protocols/callbacks for necessary coordination
+
+## Manager lifecycle
+
+### Initialization
+
+Managers are created in `NookApp.init()` and `BrowserManager.init()`:
+
+```swift
+// NookApp.swift:18-24
+@State private var windowRegistry = WindowRegistry()
+@State private var webViewCoordinator = WebViewCoordinator()
+@StateObject private var browserManager = BrowserManager()
+
+// BrowserManager.init() creates child managers
+self.tabManager = TabManager(context: context)
+self.profileManager = ProfileManager(context: context)
+```
+
+### Environment injection
+
+Managers flow down the view hierarchy:
+
+```swift
+// NookApp.swift:46-56
+ContentView()
+    .environmentObject(browserManager)           // Legacy Combine
+    .environment(windowRegistry)                 // Swift Observation
+    .environment(webViewCoordinator)             // Swift Observation
+    .environment(\.nookSettings, settingsManager) // Environment value
+```
+
+### Cleanup
+
+Managers clean up resources in `AppDelegate.applicationWillTerminate()`:
+
+```swift
+func applicationWillTerminate(_ notification: Notification) {
+    browserManager?.cleanup()
+    windowRegistry?.windows.values.forEach { windowState in
+        windowRegistry?.onWindowClose?(windowState.id)
+    }
+}
+```
+
+## Best practices
+
+When working with managers:
+
+<Note>
+  **Prefer environment injection over singletons**
+  
+  Even though some managers (like `ExtensionManager`) use singletons for WebKit compatibility, new code should use environment injection.
+</Note>
+
+<Note>
+  **Use @MainActor for all managers**
+  
+  Since managers interact with SwiftUI state, they must be `@MainActor` confined to avoid data races.
+</Note>
+
+<Note>
+  **Avoid circular dependencies**
+  
+  If Manager A needs Manager B, consider:
+  - Using a protocol/delegate pattern
+  - Injecting a callback closure
+  - Emitting events via NotificationCenter
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Models" icon="database" href="/developer/architecture/models">
+    Explore data models used by managers
+  </Card>
+  <Card title="State management" icon="arrows-rotate" href="/developer/architecture/state-management">
+    Learn about @Observable vs @Published patterns
+  </Card>
+</CardGroup>

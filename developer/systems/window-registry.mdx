@@ -1,0 +1,474 @@
+---
+title: Window registry
+description: Multi-window state tracking and coordination in Nook Browser
+---
+
+The `WindowRegistry` provides a single source of truth for all open browser windows, enabling cross-window coordination and command routing.
+
+## Architecture
+
+WindowRegistry is a lightweight `@Observable` class that tracks window states:
+
+```swift
+@MainActor
+@Observable
+class WindowRegistry {
+    @ObservationIgnored
+    private var _windows: [UUID: BrowserWindowState] = [:]
+    
+    var windows: [UUID: BrowserWindowState] {
+        get { _windows }
+        set { _windows = newValue }
+    }
+    
+    var activeWindowId: UUID?
+    
+    var activeWindow: BrowserWindowState? {
+        guard let id = activeWindowId else { return nil }
+        return _windows[id]
+    }
+}
+```
+
+**Source**: `Nook/Managers/WindowRegistry/WindowRegistry.swift`
+
+<Note>
+The `_windows` dictionary is marked `@ObservationIgnored` to avoid actor isolation issues. Only `activeWindowId` is observed for changes.
+</Note>
+
+## Window registration
+
+### Registration flow
+
+Windows register themselves during `ContentView.onAppear`:
+
+```swift
+func register(_ window: BrowserWindowState) {
+    windows[window.id] = window
+    onWindowRegister?(window)
+    print("🪟 [WindowRegistry] Registered window: \(window.id)")
+}
+```
+
+**The `onWindowRegister` callback** allows systems to perform post-registration setup:
+
+```swift
+// In BrowserManager initialization
+windowRegistry.onWindowRegister = { [weak self] window in
+    window.tabManager = self?.tabManager
+    window.browserManager = self
+}
+```
+
+**Source**: `Nook/Managers/WindowRegistry/WindowRegistry.swift:45-50`
+
+### Unregistration on close
+
+```swift
+func unregister(_ id: UUID) {
+    // Call cleanup callback if set
+    onWindowClose?(id)
+    
+    windows.removeValue(forKey: id)
+    
+    // If this was the active window, switch to another
+    if activeWindowId == id {
+        activeWindowId = windows.keys.first
+    }
+    
+    print("🪟 [WindowRegistry] Unregistered window: \(id)")
+}
+```
+
+**The `onWindowClose` callback** handles resource cleanup:
+
+```swift
+windowRegistry.onWindowClose = { [weak self] windowId in
+    self?.splitManager.cleanupSplitState(for: windowId)
+    self?.webViewCoordinator?.removeAllWebViews(for: windowId)
+    
+    // Clean up ephemeral profile if incognito window
+    if let windowState = self?.windowRegistry.windows[windowId],
+       windowState.isIncognito,
+       let profileId = windowState.profileId {
+        Task {
+            await self?.profileManager.removeEphemeralProfile(for: windowId)
+        }
+    }
+}
+```
+
+**Source**: `Nook/Managers/WindowRegistry/WindowRegistry.swift:53-65`
+
+## Active window tracking
+
+### Setting the active window
+
+```swift
+func setActive(_ window: BrowserWindowState) {
+    activeWindowId = window.id
+    onActiveWindowChange?(window)
+    print("🪟 [WindowRegistry] Active window: \(window.id)")
+}
+```
+
+**Called when**:
+- User focuses a different window
+- New window is opened
+- Active window closes and focus shifts
+
+**The `onActiveWindowChange` callback** synchronizes systems:
+
+```swift
+windowRegistry.onActiveWindowChange = { [weak self] window in
+    // Update global current tab to match active window's tab
+    if let currentTabId = window.currentTabId,
+       let tab = self?.tabManager.allTabs().first(where: { $0.id == currentTabId }) {
+        self?.tabManager.updateActiveTabState(tab)
+    }
+    
+    // Update split view context
+    self?.splitManager.setActiveWindow(window.id)
+}
+```
+
+**Source**: `Nook/Managers/WindowRegistry/WindowRegistry.swift:67-72`
+
+## BrowserWindowState
+
+Each window has a dedicated state object:
+
+```swift
+@Observable
+class BrowserWindowState: Identifiable {
+    let id: UUID
+    var currentTabId: UUID?
+    var isIncognito: Bool = false
+    var profileId: UUID?
+    
+    // Ephemeral tabs for incognito windows (not persisted)
+    var ephemeralTabs: [Tab] = []
+    
+    // Split view state
+    var isSplit: Bool = false
+    var leftTabId: UUID?
+    var rightTabId: UUID?
+    var activeSide: SplitSide = .left
+    
+    // Window-specific UI state
+    var sidebarWidth: CGFloat = 280
+    var isFullscreen: Bool = false
+    
+    weak var tabManager: TabManager?
+    weak var browserManager: BrowserManager?
+}
+```
+
+**Key properties**:
+- **`currentTabId`**: The active tab for this window
+- **`ephemeralTabs`**: Incognito tabs that are NOT persisted to disk
+- **`profileId`**: Profile for this window (persistent or ephemeral)
+- **Split state**: Left/right tab IDs and active side
+
+## Multi-window coordination
+
+### Tab visibility across windows
+
+The same tab can be displayed in multiple windows:
+
+```swift
+// In WebViewCoordinator
+func getWebView(for tab: Tab, in windowId: UUID) -> WKWebView {
+    let key = WebViewKey(tabId: tab.id, windowId: windowId)
+    
+    if let existing = webViewCache[key] {
+        return existing
+    }
+    
+    // Create window-specific WebView
+    let webView = createWebView(for: tab, windowId: windowId)
+    webViewCache[key] = webView
+    return webView
+}
+```
+
+This enables:
+- **Same tab in multiple windows**: Each gets its own WebView instance
+- **Split view**: Left and right panes in the same window
+
+### Command routing
+
+Commands are routed to the active window:
+
+```swift
+// In NookCommands.swift
+func newTab() {
+    guard let activeWindow = windowRegistry.activeWindow else { return }
+    guard let tabManager = activeWindow.tabManager else { return }
+    
+    let newTab = tabManager.createNewTab()
+    activeWindow.currentTabId = newTab.id
+}
+
+func closeTab() {
+    guard let activeWindow = windowRegistry.activeWindow else { return }
+    guard let currentTabId = activeWindow.currentTabId else { return }
+    
+    activeWindow.tabManager?.removeTab(currentTabId)
+}
+```
+
+### Window-specific state persistence
+
+Window state is NOT persisted across app launches. Each launch creates fresh `BrowserWindowState` instances. Only **tab state** (via TabManager) is persisted.
+
+**Rationale**: Window positions, sizes, and split states are session-specific and should reset on relaunch.
+
+## Incognito windows
+
+### Creating incognito windows
+
+```swift
+func openIncognitoWindow() {
+    let windowState = BrowserWindowState()
+    windowState.isIncognito = true
+    
+    // Create ephemeral profile for this window
+    let ephemeralProfile = profileManager.createEphemeralProfile(for: windowState.id)
+    windowState.profileId = ephemeralProfile.id
+    
+    windowRegistry.register(windowState)
+    
+    // Open NSWindow with this state
+    openNewWindow(with: windowState)
+}
+```
+
+### Cleanup on incognito close
+
+```swift
+windowRegistry.onWindowClose = { [weak self] windowId in
+    guard let windowState = self?.windowRegistry.windows[windowId] else { return }
+    
+    if windowState.isIncognito {
+        // Clean up ephemeral tabs (not persisted, just release references)
+        windowState.ephemeralTabs.removeAll()
+        
+        // Destroy ephemeral profile and its data store
+        Task {
+            await self?.profileManager.removeEphemeralProfile(for: windowId)
+        }
+    }
+}
+```
+
+**Source**: See [Profile manager](/developer/systems/profile-manager) for ephemeral profile lifecycle
+
+## Querying windows
+
+### Get all windows
+
+```swift
+var allWindows: [BrowserWindowState] {
+    Array(windows.values)
+}
+```
+
+### Find window by tab
+
+```swift
+func findWindow(containingTab tabId: UUID) -> BrowserWindowState? {
+    for (_, window) in windows {
+        if window.currentTabId == tabId { return window }
+        if window.leftTabId == tabId || window.rightTabId == tabId { return window }
+        if window.ephemeralTabs.contains(where: { $0.id == tabId }) { return window }
+    }
+    return nil
+}
+```
+
+### Get windows for a profile
+
+```swift
+func windows(for profileId: UUID) -> [BrowserWindowState] {
+    allWindows.filter { $0.profileId == profileId }
+}
+```
+
+## Integration with other systems
+
+### TabManager
+
+TabManager uses WindowRegistry to validate window states:
+
+```swift
+// In TabManager
+func removeTab(_ id: UUID) {
+    // ... remove tab logic ...
+    
+    browserManager?.validateWindowStates()
+}
+
+// In BrowserManager
+func validateWindowStates() {
+    for (windowId, window) in windowRegistry.windows {
+        // Ensure currentTabId is valid
+        if let tabId = window.currentTabId,
+           !tabManager.allTabs().contains(where: { $0.id == tabId }) {
+            window.currentTabId = nil
+        }
+        
+        // Validate split state
+        if window.isSplit {
+            let leftValid = tabManager.allTabs().contains(where: { $0.id == window.leftTabId })
+            let rightValid = tabManager.allTabs().contains(where: { $0.id == window.rightTabId })
+            if !leftValid || !rightValid {
+                splitManager.exitSplit(for: windowId)
+            }
+        }
+    }
+}
+```
+
+### SplitViewManager
+
+Split state is stored per window:
+
+```swift
+// In SplitViewManager
+func enterSplit(leftTab: Tab, rightTab: Tab, for windowId: UUID) {
+    guard let window = windowRegistry.windows[windowId] else { return }
+    
+    window.isSplit = true
+    window.leftTabId = leftTab.id
+    window.rightTabId = rightTab.id
+    window.activeSide = .left
+}
+
+func exitSplit(keep side: SplitSide = .left, for windowId: UUID) {
+    guard let window = windowRegistry.windows[windowId] else { return }
+    
+    let keepTabId = (side == .left) ? window.leftTabId : window.rightTabId
+    
+    window.isSplit = false
+    window.leftTabId = nil
+    window.rightTabId = nil
+    window.currentTabId = keepTabId
+}
+```
+
+### ExtensionManager
+
+ExtensionWindowAdapter uses WindowRegistry to expose window state to extensions:
+
+```swift
+func activeTab(for extensionContext: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
+    guard let activeWindow = windowRegistry.activeWindow else { return nil }
+    guard let currentTabId = activeWindow.currentTabId else { return nil }
+    guard let tab = tabManager.allTabs().first(where: { $0.id == currentTabId }) else { return nil }
+    return ExtensionManager.shared.stableAdapter(for: tab)
+}
+```
+
+**Source**: See [Extension system](/developer/systems/extension-system)
+
+## Callbacks summary
+
+```swift
+/// Callback for window cleanup (set by BrowserManager)
+var onWindowClose: ((UUID) -> Void)?
+
+/// Callback for post-registration setup (e.g., setting TabManager reference)
+var onWindowRegister: ((BrowserWindowState) -> Void)?
+
+/// Callback when active window changes
+var onActiveWindowChange: ((BrowserWindowState) -> Void)?
+```
+
+**Typical setup**:
+
+```swift
+// In BrowserManager.init()
+windowRegistry.onWindowRegister = { [weak self] window in
+    window.tabManager = self?.tabManager
+    window.browserManager = self
+}
+
+windowRegistry.onWindowClose = { [weak self] windowId in
+    self?.splitManager.cleanupSplitState(for: windowId)
+    self?.webViewCoordinator?.removeAllWebViews(for: windowId)
+    
+    if let window = self?.windowRegistry.windows[windowId], window.isIncognito {
+        Task { await self?.profileManager.removeEphemeralProfile(for: windowId) }
+    }
+}
+
+windowRegistry.onActiveWindowChange = { [weak self] window in
+    if let tabId = window.currentTabId,
+       let tab = self?.tabManager.allTabs().first(where: { $0.id == tabId }) {
+        self?.tabManager.updateActiveTabState(tab)
+    }
+}
+```
+
+## Best practices
+
+<Accordion title="Always register windows on appear">
+Register in `ContentView.onAppear` and unregister in `onDisappear`:
+
+```swift
+struct ContentView: View {
+    @State private var windowState = BrowserWindowState()
+    @EnvironmentObject var windowRegistry: WindowRegistry
+    
+    var body: some View {
+        WindowView(windowState: windowState)
+            .onAppear {
+                windowRegistry.register(windowState)
+            }
+            .onDisappear {
+                windowRegistry.unregister(windowState.id)
+            }
+    }
+}
+```
+</Accordion>
+
+<Accordion title="Use callbacks for cross-system coordination">
+Set up callbacks in BrowserManager to coordinate window lifecycle with other systems:
+
+```swift
+windowRegistry.onWindowClose = { [weak self] windowId in
+    self?.cleanupWindowResources(windowId)
+}
+```
+</Accordion>
+
+<Accordion title="Validate window state after tab changes">
+After removing tabs or spaces, validate all window states:
+
+```swift
+func removeTab(_ id: UUID) {
+    // ... remove logic ...
+    browserManager?.validateWindowStates()
+}
+```
+</Accordion>
+
+<Accordion title="Store split state per window">
+Never use global split state. Always use `window.isSplit`, `window.leftTabId`, etc.:
+
+```swift
+// ❌ WRONG
+var globalIsSplit: Bool = false
+
+// ✅ CORRECT
+window.isSplit = true
+```
+</Accordion>
+
+## Related systems
+
+- [Tab manager](/developer/systems/tab-manager) - Tab lifecycle and persistence
+- [Profile manager](/developer/systems/profile-manager) - Ephemeral profiles for incognito windows
+- [Extension system](/developer/systems/extension-system) - Extension window adapter

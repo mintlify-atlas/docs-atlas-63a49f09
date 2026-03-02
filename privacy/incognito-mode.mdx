@@ -1,0 +1,152 @@
+---
+title: "Incognito mode"
+description: "Browse privately with ephemeral profiles that leave no trace"
+icon: "eye-slash"
+---
+
+## What is incognito mode?
+
+Incognito mode in Nook Browser provides completely private browsing sessions using ephemeral profiles. When you open an incognito window, Nook creates a temporary profile with a non-persistent data store that is destroyed when you close the window.
+
+<Info>
+Ephemeral profiles use `WKWebsiteDataStore.nonPersistent()`, which means no data is ever written to disk during your incognito session.
+</Info>
+
+## How incognito mode works
+
+### Ephemeral profile creation
+
+When you open an incognito window, Nook automatically creates a new ephemeral profile:
+
+- Each incognito window gets its own isolated profile identified by the window's UUID
+- The profile uses a non-persistent `WKWebsiteDataStore` that exists only in memory
+- All tabs, spaces, and browsing data in the window are tied to this ephemeral profile
+
+### Data isolation
+
+Incognito windows maintain complete separation from your regular browsing:
+
+- **Cookies**: Stored only in memory, never written to disk
+- **Local storage**: Temporary and memory-only
+- **Cache**: Non-persistent cache that disappears on window close
+- **History**: Not recorded for ephemeral profiles
+- **IndexedDB**: Exists only for the session
+- **Service workers**: Registered temporarily, cleared on exit
+
+<Warning>
+You cannot drag tabs between incognito and normal windows. This protection prevents accidental data leakage between isolated browsing contexts.
+</Warning>
+
+## What data is saved
+
+Incognito mode ensures maximum privacy:
+
+### Never saved
+
+- Browsing history
+- Cookies and site data
+- Cached images and files
+- Download history (downloads themselves are saved to disk if you choose)
+- Form data and autofill information
+- Site permissions granted during the session
+
+### Always saved
+
+- Bookmarks you create (if you choose to add them)
+- Downloaded files (to your Downloads folder)
+- Extension settings (extensions use your default profile's configuration)
+
+<Note>
+Ephemeral profiles are marked with `isEphemeral = true` throughout the codebase, ensuring history recording and data persistence are skipped at every level.
+</Note>
+
+## How to use incognito mode
+
+<Steps>
+  <Step title="Open an incognito window">
+    Use **File > New Incognito Window** or the keyboard shortcut **⌘⇧N** to create a new incognito browsing session.
+  </Step>
+  
+  <Step title="Browse privately">
+    All tabs you open in the incognito window will use the ephemeral profile. You'll see a dark gradient theme indicating you're in incognito mode.
+  </Step>
+  
+  <Step title="Close the window">
+    When you close the incognito window, Nook destroys the ephemeral data store completely:
+    - All website data is cleared using `WKWebsiteDataStore.allWebsiteDataTypes()`
+    - Cookies are individually deleted from the HTTP cookie store
+    - The profile is removed from memory with timeout protection (5 second safety limit)
+  </Step>
+</Steps>
+
+## Privacy guarantees
+
+### Complete data destruction
+
+Nook implements thorough cleanup when you close an incognito window:
+
+```swift
+// From Profile.swift:destroyEphemeralDataStore
+let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+dataStore.removeData(ofTypes: allTypes, modifiedSince: .distantPast)
+
+// Also clear cookies specifically
+dataStore.httpCookieStore.getAllCookies { cookies in
+    for cookie in cookies {
+        self.dataStore.httpCookieStore.delete(cookie)
+    }
+}
+```
+
+See: `Profile.swift:153-185`, `ProfileManager.swift:126-158`
+
+### No cross-contamination
+
+- Ephemeral and regular profiles never share data stores
+- Tab dragging between incognito and normal windows is blocked
+- History manager skips recording for any tab with `isEphemeral = true`
+
+### Window identification
+
+Incognito windows are tracked separately to ensure proper cleanup:
+
+- Browser manager maintains a set of active incognito window IDs
+- Each window is mapped to its ephemeral profile
+- When a window closes, the profile is destroyed asynchronously with proper timeout handling
+
+## Download warnings
+
+When you download files in incognito mode:
+
+<Info>
+Nook shows a one-time warning that downloaded files are saved to disk and will remain after you close the incognito window. This ensures you understand that downloads are the one exception to incognito's "leave no trace" policy.
+</Info>
+
+## Technical implementation
+
+For developers interested in the implementation details:
+
+- **Profile model**: `Profile.swift:26-76` defines `isEphemeral` flag and `createEphemeral()` factory
+- **Profile manager**: `ProfileManager.swift:114-168` handles lifecycle of ephemeral profiles per window
+- **Browser manager**: Tracks incognito windows and prevents cross-context tab dragging
+- **History exclusion**: `HistoryManager.swift:36-38` skips recording for ephemeral profiles
+- **Data store isolation**: Each profile owns a `WKWebsiteDataStore`, ephemeral ones use `.nonPersistent()`
+
+## Limitations
+
+<Warning>
+Incognito mode doesn't make you anonymous online. Websites you visit, your employer, school, or ISP can still track your activity. For true anonymity, use a VPN or Tor.
+</Warning>
+
+### What incognito doesn't protect against
+
+- Network-level tracking by your ISP or network administrator
+- Website fingerprinting techniques
+- Tracking by the websites you visit
+- Malware or keyloggers on your device
+
+### What incognito does protect
+
+- Other users of your computer seeing your browsing history
+- Websites you visit in incognito accessing cookies from your regular profile
+- Your browsing activity being recorded in Nook's history

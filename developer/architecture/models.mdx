@@ -1,0 +1,540 @@
+---
+title: Models
+description: Data models and SwiftData entities in Nook
+---
+
+Nook uses **observable models** for runtime state and **SwiftData entities** for persistence. Models are designed to be reactive, type-safe, and compatible with SwiftUI's observation system.
+
+## Model categories
+
+<CardGroup cols={2}>
+  <Card title="Observable models" icon="eye">
+    Runtime state using `@Observable` macro for automatic UI updates
+  </Card>
+  <Card title="SwiftData entities" icon="database">
+    Persistent storage using `@Model` macro for database integration
+  </Card>
+  <Card title="Configuration objects" icon="gear">
+    Immutable or singleton configs (e.g., `BrowserConfig`)
+  </Card>
+  <Card title="Value types" icon="box">
+    Simple structs for data transfer (e.g., snapshots, DTOs)
+  </Card>
+</CardGroup>
+
+## Core observable models
+
+### Tab
+
+**Location**: `Nook/Models/Tab/Tab.swift:18`
+
+**Pattern**: Hybrid `@Observable` + `ObservableObject` (dual observation for legacy compatibility)
+
+The `Tab` model represents a browser tab with its state, webview, and metadata.
+
+```swift
+@MainActor
+public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
+    public let id: UUID
+    var url: URL
+    var name: String
+    var favicon: SwiftUI.Image
+    var spaceId: UUID?
+    var profileId: UUID?
+    var index: Int
+    
+    // Pin state
+    var isPinned: Bool = false        // Global pinned (essentials)
+    var isSpacePinned: Bool = false   // Space-level pinned
+    var folderId: UUID?               // Folder membership
+    
+    // Ephemeral state
+    var isEphemeral: Bool { resolveProfile()?.isEphemeral ?? false }
+    
+    // Loading state
+    var loadingState: LoadingState = .idle
+    
+    // Published properties for Combine compatibility
+    @Published var canGoBack: Bool = false
+    @Published var canGoForward: Bool = false
+    @Published var hasPlayingAudio: Bool = false
+    @Published var isAudioMuted: Bool = false
+    @Published var hasPlayingVideo: Bool = false
+}
+```
+
+**Key features**:
+- **Lazy webview**: `Tab.webView` computed property creates webview on first access
+- **Favicon caching**: Global LRU cache with persistent disk storage (`Tab.swift:56-70`)
+- **Loading states**: `didStartProvisionalNavigation`, `didCommit`, `didFinish`, `didFail`
+- **Media state**: Audio/video playback tracking, mute control, PiP support
+- **OAuth flow tracking**: Special handling for sign-in popup windows
+
+### Space
+
+**Location**: `Nook/Models/Space/Space.swift:16`
+
+**Pattern**: `@Observable` (Swift Observation)
+
+Spaces organize tabs into themed workspaces with custom gradients.
+
+```swift
+@MainActor
+@Observable
+public class Space: NSObject, Identifiable {
+    public let id: UUID
+    var name: String
+    var icon: String
+    var color: NSColor
+    var gradient: SpaceGradient
+    var activeTabId: UUID?
+    var profileId: UUID?
+    var isEphemeral: Bool = false
+}
+```
+
+**Related models**:
+- **SpaceGradient** (`SpaceGradient.swift`) — Gradient configuration with nodes and colors
+- **GradientNode** (`GradientNode.swift`) — Individual gradient stop with position/color
+
+### Profile
+
+**Location**: `Nook/Models/Profile/Profile.swift:16`
+
+**Pattern**: `@Observable` (Swift Observation)
+
+Profiles provide isolated browsing contexts with separate data stores.
+
+```swift
+@MainActor
+@Observable
+final class Profile: NSObject, Identifiable {
+    let id: UUID
+    var name: String
+    var icon: String
+    let dataStore: WKWebsiteDataStore  // Isolated per profile
+    
+    var isEphemeral: Bool = false      // Incognito profile
+    var isDefault: Bool { name.lowercased() == "default" }
+    
+    // Cached stats
+    private(set) var cachedCookieCount: Int = 0
+    private(set) var cachedRecordCount: Int = 0
+}
+```
+
+**Key features**:
+- **Data isolation**: Each profile gets a unique `WKWebsiteDataStore(forIdentifier: profileId)` (`Profile.swift:82-98`)
+- **Ephemeral profiles**: Use `WKWebsiteDataStore.nonPersistent()` for incognito mode
+- **Stats caching**: Cookie/record counts cached for performance
+
+**Factory method** (`Profile.swift:66`):
+```swift
+static func createEphemeral() -> Profile {
+    let profile = Profile(
+        id: UUID(),
+        name: "Incognito",
+        icon: "eye.slash",
+        dataStore: .nonPersistent()
+    )
+    profile.isEphemeral = true
+    return profile
+}
+```
+
+### BrowserWindowState
+
+**Location**: `Nook/Models/BrowserWindowState.swift:15`
+
+**Pattern**: `@Observable` (Swift Observation)
+
+Represents per-window UI state, allowing multiple windows with independent selections.
+
+```swift
+@MainActor
+@Observable
+class BrowserWindowState {
+    let id: UUID
+    
+    // Active selections
+    var currentTabId: UUID?
+    var currentSpaceId: UUID?
+    var currentProfileId: UUID?
+    var activeTabForSpace: [UUID: UUID] = [:]
+    
+    // UI state
+    var sidebarWidth: CGFloat = 250
+    var isSidebarVisible: Bool = true
+    var isCommandPaletteVisible: Bool = false
+    var urlBarFrame: CGRect = .zero
+    
+    // Toast state
+    var profileSwitchToast: BrowserManager.ProfileSwitchToast?
+    var isShowingProfileSwitchToast: Bool = false
+    
+    // Incognito state
+    var isIncognito: Bool = false
+    var ephemeralProfile: Profile?
+    var ephemeralSpaces: [Space] = []
+    
+    // References
+    weak var tabManager: TabManager?
+    weak var commandPalette: CommandPalette?
+    var window: NSWindow?
+}
+```
+
+**Usage**: Each `ContentView` creates a `BrowserWindowState` and registers it with `WindowRegistry`.
+
+## SwiftData entities
+
+### Schema definition
+
+All entities are registered in `BrowserManager.swift:29-37`:
+
+```swift
+static let schema = Schema([
+    SpaceEntity.self,
+    ProfileEntity.self,
+    TabEntity.self,
+    FolderEntity.self,
+    TabsStateEntity.self,
+    HistoryEntity.self,
+    ExtensionEntity.self,
+])
+```
+
+### TabEntity
+
+**Location**: `Nook/Models/Tab/TabsModel.swift:12`
+
+Persists tab state across app launches.
+
+```swift
+@Model
+final class TabEntity {
+    @Attribute(.unique) var id: UUID
+    var urlString: String
+    var name: String
+    var isPinned: Bool
+    var isSpacePinned: Bool
+    var index: Int
+    var spaceId: UUID?
+    var profileId: UUID?      // For global pinned tabs
+    var folderId: UUID?       // For folder membership
+    
+    // Navigation state tracking
+    var currentURLString: String?
+    var canGoBack: Bool = false
+    var canGoForward: Bool = false
+}
+```
+
+**Persistence flow**:
+1. `TabManager` creates snapshot: `Tab` → `PersistenceActor.SnapshotTab`
+2. `PersistenceActor` upserts: `SnapshotTab` → `TabEntity`
+3. On restore: `TabEntity` → `Tab`
+
+### SpaceEntity
+
+**Location**: `Nook/Models/Space/SpaceModels.swift`
+
+Persists space configuration.
+
+```swift
+@Model
+final class SpaceEntity {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var icon: String
+    var index: Int
+    var gradientData: Data?   // Encoded SpaceGradient
+    var activeTabId: UUID?
+    var profileId: UUID?
+}
+```
+
+### ProfileEntity
+
+**Location**: `Nook/Models/Profile/ProfileEntity.swift`
+
+Persists profile metadata.
+
+```swift
+@Model
+final class ProfileEntity {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var icon: String
+    var index: Int
+}
+```
+
+<Note>
+  Profile data stores are **not** persisted as entities. Each profile's `WKWebsiteDataStore` is automatically managed by WebKit based on the profile UUID.
+</Note>
+
+### FolderEntity
+
+**Location**: `Nook/Models/Tab/TabsModel.swift:61`
+
+Persists tab folders within spaces.
+
+```swift
+@Model
+final class FolderEntity {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var icon: String
+    var color: String
+    var spaceId: UUID
+    var isOpen: Bool
+    var index: Int
+}
+```
+
+### HistoryEntity
+
+**Location**: `Nook/Models/History/HistoryEntity.swift`
+
+Persists browsing history entries.
+
+```swift
+@Model
+final class HistoryEntity {
+    @Attribute(.unique) var id: UUID
+    var urlString: String
+    var title: String
+    var visitDate: Date
+    var profileId: UUID
+}
+```
+
+### ExtensionEntity
+
+**Location**: `Nook/Models/Extension/ExtensionModels.swift`
+
+Persists installed browser extensions.
+
+```swift
+@Model
+final class ExtensionEntity {
+    @Attribute(.unique) var id: String  // Extension unique identifier
+    var displayName: String
+    var version: String
+    var isEnabled: Bool
+    var installDate: Date
+    var manifestData: Data
+}
+```
+
+## Configuration models
+
+### BrowserConfig
+
+**Location**: `Nook/Models/BrowserConfig/BrowserConfig.swift:12`
+
+**Pattern**: Singleton
+
+Provides shared `WKWebViewConfiguration` for all webviews.
+
+```swift
+class BrowserConfiguration {
+    static let shared = BrowserConfiguration()
+    
+    lazy var webViewConfiguration: WKWebViewConfiguration = {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.preferences.isElementFullscreenEnabled = true
+        // ... extension controller set by ExtensionManager
+        return config
+    }()
+    
+    // Profile-specific config derivation
+    func webViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
+        let config = webViewConfiguration.copy() as! WKWebViewConfiguration
+        config.userContentController = freshUserContentController()
+        config.websiteDataStore = profile.dataStore
+        return config
+    }
+}
+```
+
+**Critical pattern** (`BrowserConfig.swift:92-102`):
+- All webview configs MUST derive from the base config via `.copy()`
+- This ensures extension controller and process pool are shared
+- Direct instantiation of `WKWebViewConfiguration()` breaks extension support
+
+See [WebView coordination](/developer/architecture/webview-coordination) for details.
+
+## Value types and snapshots
+
+### PersistenceActor snapshots
+
+**Location**: `Nook/Managers/TabManager/TabManager.swift:33-82`
+
+Lightweight, serializable representations for atomic persistence.
+
+```swift
+struct SnapshotTab: Codable {
+    let id: UUID
+    let urlString: String
+    let name: String
+    let index: Int
+    let spaceId: UUID?
+    let isPinned: Bool
+    let isSpacePinned: Bool
+    let profileId: UUID?
+    let folderId: UUID?
+    let currentURLString: String?
+    let canGoBack: Bool
+    let canGoForward: Bool
+}
+
+struct SnapshotSpace: Codable { ... }
+struct SnapshotFolder: Codable { ... }
+struct SnapshotState: Codable { ... }
+
+struct Snapshot: Codable {
+    let spaces: [SnapshotSpace]
+    let tabs: [SnapshotTab]
+    let folders: [SnapshotFolder]
+    let state: SnapshotState
+}
+```
+
+**Purpose**: Decouple persistence from observable models to avoid actor isolation issues.
+
+## Model conversion patterns
+
+### Observable → Entity
+
+```swift
+// TabManager creates snapshots
+let snapshotTabs = tabs.map { tab in
+    PersistenceActor.SnapshotTab(
+        id: tab.id,
+        urlString: tab.url.absoluteString,
+        name: tab.name,
+        // ...
+    )
+}
+
+// PersistenceActor upserts entities
+func upsertTab(in ctx: ModelContext, tab: SnapshotTab) throws {
+    let existing = try ctx.fetch(
+        FetchDescriptor<TabEntity>(predicate: #Predicate { $0.id == tab.id })
+    ).first
+    
+    if let entity = existing {
+        entity.urlString = tab.urlString
+        entity.name = tab.name
+        // ...
+    } else {
+        let entity = TabEntity(id: tab.id, urlString: tab.urlString, ...)
+        ctx.insert(entity)
+    }
+}
+```
+
+### Entity → Observable
+
+```swift
+// TabManager restores from entities
+func loadTabs() {
+    let entities = try context.fetch(FetchDescriptor<TabEntity>())
+    self.tabs = entities.map { entity in
+        Tab(
+            id: entity.id,
+            url: URL(string: entity.urlString) ?? defaultURL,
+            name: entity.name,
+            index: entity.index,
+            spaceId: entity.spaceId
+        )
+    }
+}
+```
+
+## Observable patterns
+
+### Swift Observation (@Observable)
+
+Modern approach used by `Space`, `Profile`, `BrowserWindowState`, `WebViewCoordinator`, `WindowRegistry`.
+
+```swift
+@MainActor
+@Observable
+class Profile {
+    var name: String  // Automatically tracked
+    var icon: String  // Automatically tracked
+    
+    // Explicit non-tracking
+    @ObservationIgnored
+    private var cache: [String: Any] = [:]
+}
+```
+
+**Usage in SwiftUI**:
+```swift
+@Environment(Profile.self) private var profile
+// or
+@Bindable var space: Space
+```
+
+### Combine (@Published)
+
+Legacy approach used by `BrowserManager`, `Tab` (hybrid).
+
+```swift
+@MainActor
+final class BrowserManager: ObservableObject {
+    @Published var currentTab: Tab?
+    @Published var spaces: [Space] = []
+}
+```
+
+**Usage in SwiftUI**:
+```swift
+@EnvironmentObject var browserManager: BrowserManager
+// or
+@ObservedObject var tab: Tab
+```
+
+## Best practices
+
+<Note>
+  **Use @Observable for new models**
+  
+  Swift Observation (`@Observable`) is the modern approach with better performance and cleaner syntax. Only use `@Published` for legacy compatibility.
+</Note>
+
+<Note>
+  **Keep models MainActor-confined**
+  
+  All models that interact with SwiftUI must be `@MainActor` to prevent data races.
+</Note>
+
+<Note>
+  **Use snapshots for async persistence**
+  
+  Don't pass observable models directly to actors. Convert to `Codable` snapshots first to avoid actor isolation errors.
+</Note>
+
+<Note>
+  **Validate entity → model conversions**
+  
+  Always handle missing/corrupt data when restoring from `SwiftData`. Use default values or skip invalid entities.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="State management" icon="arrows-rotate" href="/developer/architecture/state-management">
+    Learn about @Observable vs @Published and persistence patterns
+  </Card>
+  <Card title="WebView coordination" icon="globe" href="/developer/architecture/webview-coordination">
+    Understand how BrowserConfig and profiles interact with webviews
+  </Card>
+</CardGroup>

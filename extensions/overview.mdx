@@ -1,0 +1,82 @@
+---
+title: Extensions overview
+description: Understand how browser extensions work in Nook
+---
+
+Nook supports browser extensions using Apple's native WKWebExtension framework, providing compatibility with Chrome and Safari extensions.
+
+## What are extensions?
+
+Extensions are small programs that add functionality to your browser. They can modify web pages, interact with browser features, and provide custom tools accessible from the toolbar.
+
+In Nook, extensions run using the same underlying technology as Safari extensions, with enhanced compatibility for Chrome-style extensions.
+
+## Extension compatibility
+
+### Supported extension types
+
+Nook supports multiple extension formats:
+
+- **Chrome/Chromium extensions** - ZIP archives or unpacked directories containing a `manifest.json` file
+- **Safari Web Extensions** - `.appex` bundles or `.app` bundles containing extension plugins
+- **Manifest V2 and V3** - Both modern (MV3) and legacy (MV2) manifest versions work
+
+<Note>
+Nook automatically converts Safari extension IDs to work with WKWebExtension, maintaining compatibility with extensions that use `externally_connectable` features.
+</Note>
+
+### Extension features
+
+Supported extension capabilities include:
+
+- **Content scripts** - Inject JavaScript into web pages (ISOLATED or MAIN world)
+- **Background service workers** - Run persistent background tasks (MV3)
+- **Background pages** - Legacy persistent background scripts (MV2)
+- **Action popups** - Display UI when clicking extension toolbar buttons
+- **Options pages** - Provide settings interfaces in separate windows
+- **Web accessible resources** - Serve extension files to web pages
+- **Native messaging** - Communicate with native applications
+
+## Use cases
+
+### Password managers
+
+Extensions like Bitwarden and 1Password integrate directly into web forms, providing autofill capabilities and secure password storage.
+
+### Developer tools
+
+Extensions can add debugging panels, modify network requests, or inject development utilities into every page you visit.
+
+### Content modification
+
+Ad blockers, dark mode enforcers, and reading enhancers modify page content and appearance to improve your browsing experience.
+
+### Tab and window management
+
+Extensions can organize, search, and manipulate your tabs and windows through the browser's extension APIs.
+
+## System requirements
+
+<Warning>
+Extension support requires **macOS 15.5** or later. Nook uses the latest WKWebExtension APIs which are only available in newer versions of macOS.
+</Warning>
+
+The extension system provides:
+
+- **Profile isolation** - Extension storage and state are isolated per profile
+- **Web Inspector** - Debug extension background pages and popups
+- **Permission controls** - Manage what extensions can access
+- **Automatic updates** - Extensions notify when updates are available
+
+## Technical architecture
+
+Nook's extension implementation:
+
+1. **WKWebExtensionController** manages all installed extensions
+2. **Shared process pool** enables communication between content scripts and background workers
+3. **Profile-specific data stores** isolate extension storage per browsing profile
+4. **Bridge scripts** provide compatibility with externally_connectable extensions
+
+<Note>
+Extensions are installed globally but their storage (cookies, localStorage, IndexedDB) is isolated per profile. This means you can use the same extension with different accounts in different profiles.
+</Note>

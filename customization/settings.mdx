@@ -1,0 +1,319 @@
+---
+title: Settings
+description: Configure Nook to match your browsing preferences
+---
+
+Nook's settings are organized into tabs that let you customize appearance, privacy, search, keyboard shortcuts, and more. Access settings by pressing `Cmd+,` or selecting **Nook > Settings** from the menu bar.
+
+## General settings
+
+### Browser behavior
+
+<ParamField path="Ask before quitting" type="toggle" default="enabled">
+  Show a confirmation dialog when quitting Nook to prevent accidental closure.
+</ParamField>
+
+<ParamField path="Sidebar position" type="dropdown" default="Left">
+  Choose whether the sidebar appears on the left or right side of the window.
+  
+  Options:
+  - **Left** - Classic sidebar layout
+  - **Right** - Sidebar on the right side
+</ParamField>
+
+<ParamField path="Top bar address view" type="toggle" default="disabled">
+  Show the address bar and navigation buttons at the top of the window instead of in the sidebar.
+  
+  <Note>When tabs are positioned at the top of the window, the URL bar is automatically moved to the top bar.</Note>
+</ParamField>
+
+<ParamField path="Link status bar" type="toggle" default="enabled">
+  Show a URL preview in the bottom-left corner when hovering over links.
+</ParamField>
+
+### Search
+
+<ParamField path="Default search engine" type="dropdown" default="Google">
+  Choose your default search provider for address bar searches.
+  
+  Built-in providers:
+  - Google
+  - DuckDuckGo
+  - Bing
+  - Brave Search
+  - Yahoo
+  - Perplexity
+  - Unduck
+  - Ecosia
+  - Kagi
+  
+  You can also add custom search engines using the **+** button.
+</ParamField>
+
+<Accordion title="Add a custom search engine">
+  1. Click the **+** button next to the search engine dropdown
+  2. Enter a name for your search engine
+  3. Enter the URL template, using `%@` as the placeholder for the search query
+     
+     Example: `https://startpage.com/search?q=%@`
+  4. Click **Save**
+  
+  Your custom search engine will appear in the dropdown and can be removed anytime.
+</Accordion>
+
+### Site search
+
+Site search lets you quickly search specific websites directly from the command palette.
+
+<ParamField path="Site search entries" type="list">
+  Manage custom search shortcuts for your favorite sites.
+  
+  <Tip>Type a prefix in the command palette and press Tab to search that site directly. For example, type `gh` + Tab to search GitHub.</Tip>
+</ParamField>
+
+Default site search entries include popular sites like GitHub, YouTube, and Wikipedia. You can:
+- Add new entries with custom prefixes and domains
+- Assign color indicators for quick identification
+- Reset to default entries anytime
+
+### Performance
+
+<ParamField path="Tab unload timeout" type="dropdown" default="60 minutes">
+  Automatically unload inactive tabs to reduce memory usage.
+  
+  Options:
+  - 15 minutes
+  - 30 minutes
+  - 60 minutes
+  - 2 hours
+  - 4 hours
+  - Never
+  
+  Unloaded tabs remain in your tab list but don't consume memory until you revisit them.
+</ParamField>
+
+You can manually unload all inactive tabs using the **Unload All Inactive Tabs** button.
+
+## Appearance settings
+
+### Visual style
+
+<ParamField path="Background material" type="dropdown" default="Arc (hudWindow)">
+  Choose the window background blur effect.
+  
+  Available materials:
+  - titlebar
+  - menu
+  - popover
+  - sidebar
+  - headerView
+  - sheet
+  - windowBackground
+  - **Arc (hudWindow)** - Recommended
+  - fullScreenUI
+  - toolTip
+  - contentBackground
+  - underWindowBackground
+  - underPageBackground
+</ParamField>
+
+<ParamField path="Liquid Glass" type="toggle" default="enabled">
+  Enable translucent glass effect for the browser interface.
+</ParamField>
+
+### Favorites appearance
+
+<ParamField path="Pinned tabs look" type="dropdown" default="Arc (large)">
+  Choose the size and layout of your pinned tabs (favorites).
+  
+  Options:
+  - **Arc (large)** - 47×47px buttons with larger favicons (max 4 columns)
+  - **Dia (small)** - 41×41px compact buttons (max 8 columns)
+</ParamField>
+
+## AI settings
+
+Configure AI chat powered by multiple providers including Gemini, OpenRouter, and Ollama.
+
+### Providers
+
+<ParamField path="AI provider" type="dropdown" default="Google Gemini">
+  Select your AI provider.
+  
+  Supported providers:
+  - **Google Gemini** - Requires API key
+  - **OpenRouter** - Access to multiple models with one API
+  - **Ollama (Local)** - Run models locally
+  - **OpenAI-compatible** - Custom endpoints
+</ParamField>
+
+<Accordion title="Configure Google Gemini">
+  1. Get your API key from [Google AI Studio](https://aistudio.google.com/apikey)
+  2. Paste it into the **Gemini API Key** field
+  3. Choose your model:
+     - **Gemini Flash** - Fast responses for quick questions
+     - **Gemini 2.5 Pro** - Most capable, best for complex analysis
+</Accordion>
+
+<Accordion title="Configure OpenRouter">
+  1. Get an API key from [OpenRouter](https://openrouter.ai)
+  2. Enter your API key
+  3. Fetch available models or add by ID
+  4. Select your preferred model
+  
+  Popular models include GPT-4o, Claude Sonnet 4.5, and various open models.
+</Accordion>
+
+<Accordion title="Configure Ollama (local models)">
+  1. Install [Ollama](https://ollama.ai) on your Mac
+  2. Set the endpoint (default: `http://localhost:11434`)
+  3. Fetch installed models
+  4. Select a model to use
+</Accordion>
+
+### Generation settings
+
+<ParamField path="Temperature" type="slider" default="0.7">
+  Control creativity vs. focus (0.0 - 2.0).
+  
+  - **Lower** (0.0-0.7) - More focused and deterministic
+  - **Higher** (0.7-2.0) - More creative and varied
+</ParamField>
+
+<ParamField path="Max output tokens" type="number" default="4096">
+  Maximum length of AI responses.
+</ParamField>
+
+<ParamField path="System prompt" type="text">
+  Customize the AI's behavior and personality with a system prompt.
+</ParamField>
+
+<ParamField path="Enable streaming" type="toggle" default="enabled">
+  Stream responses as they're generated for faster feedback.
+</ParamField>
+
+### Web search
+
+<ParamField path="Web search" type="toggle" default="disabled">
+  Allow the AI to search the web for up-to-date information.
+</ParamField>
+
+When enabled, you can configure:
+- **Engine**: Auto, Native, or Exa
+- **Context size**: Low, Medium, or High
+- **Max results**: 3, 5, or 10
+
+### Browser tools
+
+Control which browser automation tools the AI can use:
+
+<ParamField path="Execution mode" type="dropdown">
+  - **Manual** - You approve each tool use
+  - **Automatic** - AI can use tools without asking
+</ParamField>
+
+Available tools include:
+- Navigate to URL
+- Click element
+- Fill input
+- Scroll page
+- Take screenshot
+- And more
+
+### MCP servers
+
+Configure Model Context Protocol (MCP) servers to extend AI capabilities with custom tools.
+
+<Accordion title="Add an MCP server">
+  1. Click **Add Server**
+  2. Enter server name
+  3. Enter the command path (e.g., `/usr/local/bin/mcp-server`)
+  4. Add arguments if needed (space-separated)
+  5. Click **Add**
+  
+  The server will connect automatically and expose its tools to the AI.
+</Accordion>
+
+## Privacy settings
+
+### Cookie management
+
+View and manage cookies stored by websites.
+
+- **Total cookies** - Session and persistent cookies
+- **Manage Cookies** - Browse and delete specific cookies
+- **Clear Expired Cookies** - Remove outdated cookies
+- **Clear Third-Party Cookies** - Remove tracking cookies
+- **Clear High-Risk Cookies** - Remove potentially tracking cookies
+- **Privacy Cleanup** - Intelligent cleanup of tracking data
+
+### Cache management
+
+Control cached website data to free up disk space.
+
+- **Total cache** - Disk and memory cache
+- **Manage Cache** - Browse cached resources
+- **Clear Stale Cache** - Remove outdated cached data
+- **Clear Disk Cache** - Remove all disk-cached files
+- **Clear Memory Cache** - Clear in-memory cache
+
+### Privacy controls
+
+<ParamField path="Block cross-site tracking" type="toggle" default="disabled">
+  Block cross-site tracking using content rules and iframe cookie protection.
+  
+  <Note>This uses WKContentRuleList to block known trackers and prevents third-party iframes from accessing cookies.</Note>
+</ParamField>
+
+### Website data
+
+Quickly clear browsing data:
+- **Clear Browsing History** - Remove all history entries
+- **Clear Cache** - Remove cached website data
+- **Clear All Website Data** - Complete privacy reset
+
+## Profiles settings
+
+Profiles let you separate your browsing into distinct personas with isolated data.
+
+### Managing profiles
+
+Each profile maintains:
+- Separate cookie and website data stores
+- Independent browsing history
+- Isolated spaces and tabs
+- Profile-specific settings
+
+<Accordion title="Create a new profile">
+  1. Click **Create Profile**
+  2. Enter a name
+  3. Choose an icon
+  4. Click **Create**
+  
+  The new profile is created with an isolated data store and becomes active.
+</Accordion>
+
+### Space assignments
+
+Assign spaces to specific profiles:
+- **Assign All to Current Profile** - Move all spaces to the active profile
+- **Reset to Default Profile** - Move all spaces back to the default profile
+
+Each space can belong to only one profile at a time.
+
+### Migration tools
+
+If you're upgrading from a version without profiles:
+- **Detect Legacy Data** - Scan for shared cookies and site data
+- **Migrate to Current Profile** - Move shared data into your active profile
+- **Start Fresh** - Clear shared data without migration
+
+## Keyboard shortcuts
+
+Customize keyboard shortcuts for faster navigation. See [Keyboard shortcuts](/customization/keyboard-shortcuts) for details.
+
+## Extensions (macOS 15.5+)
+
+Manage browser extensions when available on your system.
+
+<Note>Extension support requires macOS 15.5 or later.</Note>

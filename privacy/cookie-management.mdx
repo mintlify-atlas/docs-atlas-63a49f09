@@ -1,0 +1,317 @@
+---
+title: "Cookie management"
+description: "View, manage, and control cookies with per-profile isolation"
+icon: "cookie-bite"
+---
+
+## Overview
+
+Nook Browser provides comprehensive cookie management with complete isolation between profiles. Each profile maintains its own cookie storage, and the Cookie Manager gives you full visibility and control over stored cookies.
+
+## Profile-based cookie storage
+
+### How cookies are isolated
+
+Nook uses WebKit's `WKWebsiteDataStore` to provide complete cookie isolation:
+
+- Each profile owns a unique, persistent `WKWebsiteDataStore` identified by the profile's UUID
+- Cookies set in one profile are never accessible to other profiles
+- Ephemeral (incognito) profiles use non-persistent stores that are destroyed on window close
+
+<Info>
+Cookie storage is isolated at the WebKit level, ensuring even JavaScript running on websites cannot access cookies from other profiles.
+</Info>
+
+### Data store creation
+
+On macOS 15.4+, Nook creates profile-specific data stores:
+
+```swift
+// From Profile.swift:82-98
+let store = WKWebsiteDataStore(forIdentifier: profileId)
+if !store.isPersistent {
+    print("⚠️ Created data store is not persistent")
+} else {
+    print("✅ Using persistent data store for profile")
+}
+```
+
+See: `Profile.swift:79-98`, `BrowserConfig.swift`
+
+### Profile switching
+
+When you switch profiles, the Cookie Manager updates its data store reference:
+
+- In-memory cookie cache is cleared
+- New data store is loaded
+- Cookies are reloaded from the new profile's store
+- Current profile ID is tracked for diagnostics
+
+See: `CookieManager.swift:26-38`
+
+## Viewing cookies
+
+### Cookie information
+
+The Cookie Manager provides detailed information for each cookie:
+
+- **Name**: Cookie identifier
+- **Value**: Cookie content (truncated if > 100 characters)
+- **Domain**: The domain that set the cookie
+- **Path**: URL path scope
+- **Size**: Total bytes (name + value)
+- **Secure**: Whether the cookie requires HTTPS
+- **HTTP Only**: Whether the cookie is inaccessible to JavaScript
+- **Same Site**: Same-site policy (None, Lax, or Strict)
+- **Expires**: Expiration date or "Session" for session cookies
+
+See: `CookieModels.swift:13-68`
+
+### Grouping by domain
+
+Cookies are automatically grouped by domain:
+
+- Domains are normalized (leading dots are removed for display)
+- Each group shows cookie count and total size
+- Groups are sorted alphabetically by display domain
+- Third-party cookies (domain starting with `.`) are identified
+
+```swift
+// From CookieManager.swift:219-228
+let grouped = Dictionary(grouping: cookies) { cookie in
+    cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+}
+```
+
+### Cookie statistics
+
+The Cookie Manager provides real-time statistics:
+
+- **Total cookies**: All cookies in the current profile
+- **Session cookies**: Cookies without an expiration date
+- **Persistent cookies**: Cookies with an expiration date
+- **Expired cookies**: Cookies past their expiration date
+- **Total size**: Combined size of all cookies in bytes
+
+See: `CookieManager.swift:196-215`
+
+## Managing cookies
+
+### Clearing cookies
+
+<Steps>
+  <Step title="Clear all cookies">
+    Use `deleteAllCookies()` to remove all cookies from the current profile's data store. This is useful for troubleshooting or privacy cleanup.
+  </Step>
+  
+  <Step title="Clear cookies for a domain">
+    Use `deleteCookiesForDomain()` to remove all cookies for a specific domain, including both first-party (exact match) and third-party (`.domain`) variants.
+  </Step>
+  
+  <Step title="Clear individual cookies">
+    Use `deleteCookie()` to remove a specific cookie by matching name, domain, and path.
+  </Step>
+  
+  <Step title="Clear expired cookies">
+    Use `deleteExpiredCookies()` to clean up cookies that have passed their expiration date.
+  </Step>
+</Steps>
+
+See: `CookieManager.swift:76-98`
+
+### Privacy-focused cleanup
+
+Nook provides specialized cleanup operations for privacy-conscious users:
+
+#### Delete high-risk cookies
+
+Removes cookies with privacy concerns:
+- Not secure AND not HTTP-only
+- SameSite=None without Secure flag
+- Very long expiration (> 1 year)
+- Large size (> 4KB, potential fingerprinting)
+
+See: `CookieManager.swift:102-116`, `CookieModels.swift:71-102`
+
+#### Delete third-party cookies
+
+Removes all cookies with domains starting with `.`, which typically indicates third-party tracking cookies:
+
+```swift
+// From CookieManager.swift:134-143
+let thirdPartyCookies = httpCookies.filter { $0.domain.hasPrefix(".") }
+for cookie in thirdPartyCookies {
+    await dataStore.httpCookieStore.deleteCookieAsync(cookie)
+}
+```
+
+#### Delete non-compliant cookies
+
+Removes cookies with compliance issues:
+- SameSite=None without Secure flag
+- Missing security flags (Secure, HttpOnly)
+- Size exceeds 4KB recommended limit
+- Expiration exceeds 1 year (GDPR concern)
+- Third-party cookies with SameSite=None
+
+See: `CookieManager.swift:118-132`, `CookieModels.swift:119-143`
+
+#### Comprehensive privacy cleanup
+
+Performs a full privacy-compliant cleanup:
+
+<Steps>
+  <Step title="Remove expired cookies">
+    Clears cookies past their expiration date.
+  </Step>
+  
+  <Step title="Remove high-risk cookies">
+    Deletes cookies with security or privacy concerns.
+  </Step>
+  
+  <Step title="Reload cookie list">
+    Refreshes the cookie manager state to reflect changes.
+  </Step>
+</Steps>
+
+See: `CookieManager.swift:145-152`
+
+<Warning>
+Privacy cleanup operations are permanent and cannot be undone. Make sure you understand which cookies will be removed before proceeding.
+</Warning>
+
+## Cookie privacy assessment
+
+### Risk levels
+
+Each cookie is automatically assigned a privacy risk level:
+
+| Risk Level | Indicators |
+|------------|------------|
+| **Low** | Secure + HTTP-only flags set, reasonable expiration |
+| **Medium** | Missing one security flag or SameSite=None without Secure |
+| **High** | Multiple security issues, large size, or very long expiration |
+
+See: `CookieModels.swift:71-102`
+
+### Compliance issues
+
+Nook identifies specific compliance problems:
+
+- **SameSite=None requires Secure**: Cookies with SameSite=None must be sent over HTTPS
+- **Missing security flags**: Cookies should have Secure and HttpOnly flags when appropriate
+- **Size exceeds 4KB**: Oversized cookies may indicate tracking or fingerprinting
+- **Expiration > 1 year**: GDPR recommends shorter cookie lifetimes
+- **Third-party SameSite=None**: Cross-site tracking cookies
+
+<Info>
+Compliance assessment helps you identify cookies that may violate best practices or privacy regulations like GDPR.
+</Info>
+
+## Searching and filtering
+
+### Search cookies
+
+Search across cookie properties:
+- Cookie name
+- Domain
+- Value
+
+The search is case-insensitive and matches partial strings.
+
+See: `CookieManager.swift:154-163`
+
+### Filter cookies
+
+Apply filters to view specific cookie types:
+
+- **All Cookies**: Show everything
+- **Session Only**: Cookies without expiration dates
+- **Persistent Only**: Cookies with expiration dates
+- **Secure Only**: Cookies with the Secure flag
+- **Expired**: Cookies past their expiration date
+- **Third-Party**: Cookies from cross-site domains
+- **High Privacy Risk**: Cookies with significant privacy concerns
+- **Non-Compliant**: Cookies with compliance issues
+
+See: `CookieModels.swift:207-237`
+
+### Sort cookies
+
+Sort cookies by:
+
+- **Domain**: Alphabetical by domain name
+- **Name**: Alphabetical by cookie name
+- **Size**: By total byte size (name + value)
+- **Expiration**: By expiration date (session cookies first)
+
+Each sort can be ascending or descending.
+
+See: `CookieManager.swift:169-194`
+
+## Exporting cookies
+
+You can export cookies to JSON format:
+
+- Uses ISO 8601 date encoding
+- Pretty-printed for readability
+- Includes all cookie metadata
+- Exports current profile's cookies only
+
+See: `CookieManager.swift:234-246`
+
+## Technical implementation
+
+### Async cookie operations
+
+Nook uses Swift concurrency to bridge WebKit's completion-handler APIs:
+
+```swift
+// From CookieManager.swift:267-284
+extension WKHTTPCookieStore {
+    func allCookiesAsync() async -> [HTTPCookie] {
+        await withCheckedContinuation { continuation in
+            self.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
+        }
+    }
+    
+    func deleteCookieAsync(_ cookie: HTTPCookie) async {
+        await withCheckedContinuation { continuation in
+            self.delete(cookie) {
+                continuation.resume()
+            }
+        }
+    }
+}
+```
+
+### Data store synchronization
+
+When switching profiles, the Cookie Manager:
+
+1. Updates the internal `dataStore` reference
+2. Clears cached cookies and domain groups
+3. Optionally reloads cookies from the new store
+4. Logs the switch with persistence status
+
+See: `CookieManager.swift:26-38`
+
+## Best practices
+
+<Note>
+**Regular cleanup**: Periodically delete expired and high-risk cookies to maintain privacy and reduce tracking surface.
+</Note>
+
+<Note>
+**Review third-party cookies**: Check which sites are setting cross-domain cookies and consider blocking or removing them.
+</Note>
+
+<Note>
+**Use profiles**: Separate work, personal, and sensitive browsing into different profiles for maximum isolation.
+</Note>
+
+<Warning>
+Deleting cookies may sign you out of websites and clear saved preferences. Make sure you know your passwords before clearing cookies.
+</Warning>

@@ -1,0 +1,451 @@
+---
+title: Debugging
+description: Tools and techniques for debugging Nook extensions
+---
+
+Nook provides comprehensive debugging tools for extensions, including Web Inspector access, console logging, and diagnostic utilities.
+
+## Web Inspector
+
+All extension contexts have Web Inspector enabled by default.
+
+```swift
+// ExtensionManager.swift:1546
+// Enable Web Inspector for extension pages (background, popup)
+extensionContext.isInspectable = true
+```
+
+### Inspecting background workers
+
+<Steps>
+  <Step title="Enable Develop menu">
+    In Safari or Nook, enable the Develop menu:
+    - **Safari**: Preferences → Advanced → Show Develop menu
+    - The Develop menu appears in the menu bar
+  </Step>
+
+  <Step title="Find background page">
+    - Open **Develop** → **Web Extension Background Pages**
+    - Select your extension's background worker
+    - Web Inspector opens showing console, sources, network, etc.
+  </Step>
+
+  <Step title="Debug background script">
+    Use Web Inspector to:
+    - View console logs from background worker
+    - Set breakpoints in service worker code
+    - Inspect network requests
+    - Monitor storage changes
+  </Step>
+</Steps>
+
+### Inspecting popups
+
+For extension action popups:
+
+1. Right-click on the extension toolbar icon
+2. Select **Inspect Extension Popup**
+3. Web Inspector opens for the popup context
+
+<Note>
+  Popup must be open for inspection. The popup stays open while Inspector is attached.
+</Note>
+
+### Inspecting content scripts
+
+Content scripts run in web page contexts:
+
+1. Navigate to the page where content scripts inject
+2. Right-click page → **Inspect Element**
+3. In Console, switch context dropdown to your extension's isolated world
+
+## Extension console
+
+Nook includes a dedicated popup console for real-time debugging:
+
+```swift
+// Nook/Components/Extensions/PopupConsoleWindow.swift:4
+final class PopupConsole: NSObject {
+    func attach(to webView: WKWebView) {
+        // Injects console interceptor
+        // Logs to native NSWindow console
+    }
+}
+```
+
+The console intercepts `console.log()`, `console.error()`, and `console.warn()` calls and displays them in a native window.
+
+### Console features
+
+- **Live logging**: See console output in real-time
+- **JavaScript execution**: Run arbitrary JS in popup context
+- **API availability check**: Automatically logs available extension APIs on load
+
+```javascript Auto-injected probe
+console.log('Extension APIs available:', {
+  browser: typeof browser !== 'undefined',
+  chrome: typeof chrome !== 'undefined',
+  runtime: typeof (browser?.runtime || chrome?.runtime) !== 'undefined',
+  storage: typeof (browser?.storage || chrome?.storage) !== 'undefined',
+  tabs: typeof (browser?.tabs || chrome?.tabs) !== 'undefined'
+});
+```
+
+## Background health probes
+
+Nook automatically runs diagnostic probes after loading background workers.
+
+### Automatic health checks
+
+Probes run at **+3 seconds** and **+8 seconds** after background load:
+
+```swift
+// ExtensionManager.swift:3467
+private func probeBackgroundHealth(for context: WKWebExtensionContext, name: String) {
+    for delay in [3.0, 8.0] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let bgWV = (context as AnyObject).value(forKey: "_backgroundWebView") as? WKWebView else {
+                NSLog("[EXT-HEALTH] [\(name)] +\(Int(delay))s: No background webview found")
+                return
+            }
+            
+            bgWV.evaluateJavaScript(/* capability probe */) { result, error in
+                NSLog("[EXT-HEALTH] [\(name)] +\(Int(delay))s background APIs:\n\(json)")
+            }
+        }
+    }
+}
+```
+
+### Viewing health probes
+
+Health probe output appears in **Xcode console** with `[EXT-HEALTH]` prefix:
+
+```
+[EXT-HEALTH] [Dark Reader] +3s background APIs:
+{
+  "url": "webkit-extension://ABC123/background.js",
+  "apiNamespace": "browser",
+  "runtime": true,
+  "runtimeId": "ABC123",
+  "alarms": true,
+  "storage": true,
+  "storageLocal": true,
+  "storageSession": true,
+  "tabs": true,
+  "scripting": true,
+  "permissions": true,
+  "action": true,
+  "windows": true
+}
+```
+
+### Capability probe
+
+The health probe checks these APIs:
+
+<ParamField path="url" type="string">
+  Background worker URL (webkit-extension://...)
+</ParamField>
+
+<ParamField path="apiNamespace" type="string">
+  `"browser"` or `"chrome"` depending on which is available
+</ParamField>
+
+<ParamField path="runtime" type="boolean">
+  `browser.runtime` API available
+</ParamField>
+
+<ParamField path="runtimeId" type="string">
+  Extension's runtime ID
+</ParamField>
+
+<ParamField path="storage" type="boolean">
+  `browser.storage` available
+</ParamField>
+
+<ParamField path="tabs" type="boolean">
+  `browser.tabs` available
+</ParamField>
+
+<ParamField path="scripting" type="boolean">
+  `browser.scripting` available
+</ParamField>
+
+<ParamField path="lastError" type="string">
+  `browser.runtime.lastError` if present (indicates failure)
+</ParamField>
+
+## Extension state diagnostics
+
+For active content script debugging, Nook provides `diagnoseExtensionState()`.
+
+### Triggering diagnostics
+
+Diagnostics run automatically when tabs load (useful for content script injection issues):
+
+```swift
+// Tab.swift:2476
+ExtensionManager.shared.diagnoseExtensionState(for: webView, url: newURL)
+```
+
+### Diagnostic output
+
+Logs appear in Xcode console with extension context details:
+
+```
+github.com: contexts=3, webviewHasCtrl=true, sameCtrl=true
+'Dark Reader': hasBackground=true, hasInjected=true, urlAccess=granted
+'Dark Reader' perms: activeTab, storage
+'Dark Reader' matchPatterns: <all_urls>
+'Dark Reader' bgWebView via KVC: webkit-extension://ABC123/background.js
+'Dark Reader' background: {"hasRuntime":true,"runtimeId":"ABC123","listeners":{"onConnect":true,"onMessage":true}}
+github.com page: {"drCount":5,"allStyles":12,"scripts":8}
+```
+
+### What's checked
+
+<Accordion title="Extension context diagnostics">
+  For each loaded extension:
+  
+  - **Context count**: Number of loaded `WKWebExtensionContext` instances
+  - **WebView controller**: Whether tab's webview has extension controller attached
+  - **Background presence**: `hasBackgroundContent` and `hasInjectedContent` flags
+  - **Base URL**: Extension resource base path
+  - **URL access**: Permission status for current page URL
+  - **Granted permissions**: Current permission set
+  - **Match patterns**: Granted host match patterns
+  - **Background listeners**: Whether `onMessage`/`onConnect` have registered handlers
+</Accordion>
+
+<Accordion title="Page-level diagnostics">
+  Evaluates in page context to detect:
+  
+  - **Style injection**: Number of extension-injected stylesheets (e.g., Dark Reader styles)
+  - **Total styles**: All `<style>` elements in page
+  - **Script count**: Number of `<script>` elements
+  
+  Runs twice: immediately and at +3 seconds to detect late injection or cleanup.
+</Accordion>
+
+## Common debugging scenarios
+
+### Background worker not starting
+
+<Steps>
+  <Step title="Check Xcode console">
+    Look for `[EXT-HEALTH]` logs. If `"runtime": false`, the background worker failed to initialize.
+  </Step>
+
+  <Step title="Inspect background page">
+    Open **Develop** → **Web Extension Background Pages** and check Console for errors.
+  </Step>
+
+  <Step title="Verify manifest">
+    Ensure `background.service_worker` points to a valid file:
+    
+    ```json
+    "background": {
+      "service_worker": "background.js"
+    }
+    ```
+  </Step>
+</Steps>
+
+### Content scripts not injecting
+
+<Steps>
+  <Step title="Check match patterns">
+    Verify `content_scripts[].matches` includes the current page URL:
+    
+    ```json
+    "content_scripts": [{
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"]
+    }]
+    ```
+  </Step>
+
+  <Step title="Check permissions">
+    Run diagnostics and look for `urlAccess=denied`. Grant host permissions:
+    
+    ```json
+    "host_permissions": ["https://github.com/*"]
+    ```
+  </Step>
+
+  <Step title="Verify world isolation">
+    Check if content scripts require MAIN world for page access:
+    
+    ```json
+    "content_scripts": [{
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "world": "ISOLATED"  // or "MAIN"
+    }]
+    ```
+    
+    <Warning>
+      MAIN world scripts lose `browser.*` API access. Use ISOLATED for extension API access.
+    </Warning>
+  </Step>
+</Steps>
+
+### Messaging failures
+
+<Steps>
+  <Step title="Check background listeners">
+    Diagnostics show whether listeners are registered:
+    
+    ```json Diagnostic output
+    {"listeners": {"onMessage": false, "onConnect": false}}
+    ```
+    
+    If `false`, background isn't listening. Add:
+    
+    ```javascript background.js
+    browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      // Handle message
+    });
+    ```
+  </Step>
+
+  <Step title="Verify extension ID">
+    For external messaging, ensure the web page uses the correct extension ID:
+    
+    ```javascript
+    const response = await browser.runtime.sendMessage(
+      'correct-extension-id-here',
+      { action: 'getData' }
+    );
+    ```
+  </Step>
+
+  <Step title="Check externally_connectable">
+    If messaging from web pages, verify manifest includes the origin:
+    
+    ```json
+    "externally_connectable": {
+      "matches": ["https://example.com/*"]
+    }
+    ```
+  </Step>
+</Steps>
+
+### Storage not persisting
+
+<Steps>
+  <Step title="Verify storage API">
+    Check health probe confirms `"storage": true` and `"storageLocal": true`.
+  </Step>
+
+  <Step title="Check profile isolation">
+    Remember storage is **per-profile**. Switching profiles creates new storage context.
+    
+    ```swift
+    // ExtensionManager.swift:791
+    private func getExtensionDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+        let store = WKWebsiteDataStore(forIdentifier: profileId)
+        return store
+    }
+    ```
+  </Step>
+
+  <Step title="Verify data store persistence">
+    Check Xcode logs for:
+    
+    ```
+    Extension data store is not persistent - this may cause storage issues
+    ```
+    
+    This indicates a configuration problem.
+  </Step>
+</Steps>
+
+## Logging best practices
+
+### Structured logging
+
+Use consistent log prefixes for easy filtering:
+
+```javascript background.js
+const LOG_PREFIX = '[MyExtension]';
+
+console.log(`${LOG_PREFIX} Initialized`);
+console.error(`${LOG_PREFIX} Error:`, error);
+```
+
+### Conditional debugging
+
+Use a debug flag:
+
+```javascript background.js
+const DEBUG = true;
+
+function debug(...args) {
+  if (DEBUG) console.log('[DEBUG]', ...args);
+}
+
+debug('Tab activated:', tab.id);
+```
+
+### Error tracking
+
+Log errors with context:
+
+```javascript background.js
+browser.runtime.onMessage.addListener(async (msg, sender) => {
+  try {
+    // Handle message
+  } catch (error) {
+    console.error('[ERROR] Message handler failed:', {
+      message: msg,
+      sender: sender.tab?.id,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+```
+
+## Memory debugging
+
+Nook logs memory-related events with `🔍 [MEMDEBUG]` prefix:
+
+```swift
+// ExtensionManager.swift (various locations)
+Self.logger.debug("🔍 [MEMDEBUG] Extension contexts allocated: \(extensionContexts.count)")
+```
+
+Watch for:
+- Extension context leaks
+- WebView retention issues
+- Anchor observer token cleanup
+
+## Extension resource testing
+
+List all installed extensions programmatically:
+
+```swift
+// ExtensionManager.swift:3607
+func listInstalledExtensionsForTesting() {
+    for (index, ext) in installedExtensions.enumerated() {
+        Self.logger.debug("\(index + 1). \(ext.name)")
+        Self.logger.debug("   UUID: \(ext.id)")
+        Self.logger.debug("   Version: \(ext.version)")
+    }
+}
+```
+
+Call from AppDelegate or debug console to get extension IDs for testing.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Getting started" icon="rocket" href="/extensions/development/getting-started">
+    Create your first extension
+  </Card>
+  <Card title="API reference" icon="code" href="/extensions/development/api-reference">
+    Explore available APIs
+  </Card>
+</CardGroup>

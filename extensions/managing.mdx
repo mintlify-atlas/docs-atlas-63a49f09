@@ -1,0 +1,187 @@
+---
+title: Managing extensions
+description: Enable, disable, and remove browser extensions
+---
+
+Once installed, you can control your extensions through the Extensions settings panel.
+
+## Viewing installed extensions
+
+All installed extensions appear in **Settings → Extensions**. For each extension, you can see:
+
+- **Extension name** - Display name from the manifest
+- **Version** - Current version number
+- **Manifest version** - MV2 or MV3
+- **Description** - What the extension does
+- **Enabled state** - Whether the extension is currently active
+- **Install date** - When you installed the extension
+
+## Enabling and disabling extensions
+
+### Disable an extension
+
+Disabling an extension temporarily stops it without removing it:
+
+<Steps>
+  <Step title="Open Extensions settings">
+    Navigate to Settings → Extensions
+  </Step>
+  
+  <Step title="Find the extension">
+    Locate the extension you want to disable in the list
+  </Step>
+  
+  <Step title="Toggle off">
+    Click the toggle or disable button next to the extension
+  </Step>
+</Steps>
+
+When you disable an extension:
+
+- The extension is **unloaded** from WKWebExtensionController
+- Its background worker is **terminated**
+- Content scripts **stop injecting** into new pages
+- Toolbar buttons are **removed**
+- Extension storage **remains intact** (your data is preserved)
+
+<Note>
+Disabling an extension doesn't delete its data. When you re-enable it, all settings and stored data are restored.
+</Note>
+
+### Enable a disabled extension
+
+<Steps>
+  <Step title="Open Extensions settings">
+    Navigate to Settings → Extensions
+  </Step>
+  
+  <Step title="Find the extension">
+    Locate the disabled extension in the list
+  </Step>
+  
+  <Step title="Toggle on">
+    Click the toggle or enable button next to the extension
+  </Step>
+</Steps>
+
+When you enable an extension:
+
+- The extension is **loaded** into WKWebExtensionController
+- Its background worker **starts** immediately
+- Content scripts **begin injecting** into matching pages
+- Toolbar buttons **reappear**
+- Stored data and settings are **restored**
+
+## Removing extensions
+
+Uninstalling an extension permanently removes it and deletes all its data:
+
+<Steps>
+  <Step title="Open Extensions settings">
+    Navigate to Settings → Extensions
+  </Step>
+  
+  <Step title="Find the extension">
+    Locate the extension you want to remove
+  </Step>
+  
+  <Step title="Uninstall">
+    Click the uninstall or remove button
+  </Step>
+  
+  <Step title="Confirm removal">
+    Confirm that you want to delete the extension and all its data
+  </Step>
+</Steps>
+
+Uninstalling removes:
+
+- **Extension files** from `~/Library/Application Support/Nook/Extensions/{extension-id}/`
+- **Database record** from the SwiftData persistence layer
+- **All extension storage** (localStorage, IndexedDB, cookies)
+- **Toolbar buttons** and UI elements
+- **Permission grants**
+
+<Warning>
+Uninstalling an extension is permanent. All extension data (settings, stored passwords, etc.) will be deleted and cannot be recovered.
+</Warning>
+
+## Extension state persistence
+
+Nook remembers which extensions are enabled across app restarts:
+
+- **Enabled extensions** load automatically when you launch Nook
+- **Disabled extensions** remain disabled until you manually enable them
+- **Extension settings** persist in `~/Library/Application Support/Nook/`
+
+### How extensions load on startup
+
+1. **Database query** - Nook fetches all `ExtensionEntity` records from SwiftData
+2. **Manifest validation** - Each extension's `manifest.json` is validated and patched
+3. **Parallel parsing** - Extension resources are loaded concurrently for speed
+4. **Sequential registration** - Extensions are registered with WKWebExtensionController
+5. **Background workers start** - Service workers and background pages launch
+6. **Ready state** - Extensions become available to web pages
+
+## Per-profile extension behavior
+
+### Installation scope
+
+Extensions are installed **globally** - when you install an extension, it's available in all profiles.
+
+### Storage isolation
+
+Extension **storage** is **isolated per profile**:
+
+- Each profile has its own `WKWebsiteDataStore`
+- Extension cookies, localStorage, and IndexedDB are separate per profile
+- You can use the same extension with different accounts in different profiles
+
+<Note>
+This means you can install Bitwarden once and use it with your personal vault in one profile and your work vault in another profile.
+</Note>
+
+## Debugging extensions
+
+### Enable Web Inspector
+
+For troubleshooting extensions, enable Web Inspector:
+
+<Steps>
+  <Step title="Open extension details">
+    Click on an extension in Settings → Extensions
+  </Step>
+  
+  <Step title="Open Inspector">
+    Click "Inspect Background Page" or "Inspect Popup" to open Web Inspector
+  </Step>
+  
+  <Step title="View console logs">
+    Check the Console tab for JavaScript errors and log messages
+  </Step>
+</Steps>
+
+### Popup console
+
+Nook includes a specialized console for debugging extension popups:
+
+- Shows navigation events and page loads
+- Displays available extension APIs
+- Logs JavaScript errors
+- Shows permission grants and denials
+
+## Extension updates
+
+Currently, Nook does not automatically update extensions. To update an extension:
+
+1. **Uninstall** the old version
+2. **Download** the new version
+3. **Install** the updated extension
+
+<Note>
+Automatic extension updates may be added in a future version of Nook.
+</Note>
+
+## Managing extension permissions
+
+See the [Permissions](/extensions/permissions) page for detailed information on granting and revoking extension permissions.

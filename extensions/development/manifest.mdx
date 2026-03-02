@@ -1,0 +1,384 @@
+---
+title: Manifest reference
+description: Understanding manifest.json structure and WebKit compatibility patches
+---
+
+Nook extensions use `manifest.json` to declare metadata, permissions, and capabilities. The manifest is validated and automatically patched for WebKit compatibility during installation.
+
+## Basic structure
+
+### Required fields
+
+Every extension must include these fields:
+
+<ParamField path="manifest_version" type="integer" required>
+  Manifest format version. Supported: `2` or `3`
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Extension name displayed in UI. Supports localization via `__MSG_key__` syntax
+</ParamField>
+
+<ParamField path="version" type="string" required>
+  Extension version string (e.g., `"1.2.3"`)
+</ParamField>
+
+```swift
+// Nook/Utils/ExtensionUtils.swift:34
+static func validateManifest(at url: URL) throws -> [String: Any] {
+    let data = try Data(contentsOf: url)
+    guard let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw ExtensionError.invalidManifest("Invalid JSON structure")
+    }
+    
+    guard let _ = manifest["manifest_version"] as? Int else {
+        throw ExtensionError.invalidManifest("Missing manifest_version")
+    }
+    
+    guard let _ = manifest["name"] as? String else {
+        throw ExtensionError.invalidManifest("Missing name")
+    }
+    
+    guard let _ = manifest["version"] as? String else {
+        throw ExtensionError.invalidManifest("Missing version")
+    }
+    
+    return manifest
+}
+```
+
+### Common fields
+
+<ParamField path="description" type="string">
+  Extension description shown in extension manager
+</ParamField>
+
+<ParamField path="icons" type="object">
+  Icon sizes: `16`, `32`, `48`, `64`, `128`. Nook extracts the largest available icon.
+
+  ```json
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+  ```
+</ParamField>
+
+<ParamField path="action" type="object">
+  Toolbar action configuration (MV3). Replaces `browser_action` from MV2.
+
+  ```json
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icon16.png" },
+    "default_title": "Extension Name"
+  }
+  ```
+</ParamField>
+
+## Permissions
+
+### Standard permissions
+
+<ParamField path="permissions" type="array">
+  Permissions granted at install time. All requested permissions are automatically granted.
+
+  ```json
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting"
+  ]
+  ```
+</ParamField>
+
+<ParamField path="optional_permissions" type="array">
+  Permissions that require runtime `browser.permissions.request()` call
+
+  ```json
+  "optional_permissions": ["bookmarks", "history"]
+  ```
+</ParamField>
+
+<ParamField path="host_permissions" type="array">
+  URL match patterns for site access (MV3)
+
+  ```json
+  "host_permissions": [
+    "https://github.com/*",
+    "https://*.example.com/*"
+  ]
+  ```
+</ParamField>
+
+### Permission grant model
+
+<Warning>
+  Nook uses Chrome's install-time grant model. ALL `permissions` and `host_permissions` are granted immediately without user prompts.
+</Warning>
+
+```swift
+// ExtensionManager.swift:1536
+// Grant ALL permissions and match patterns at install time (Chrome behavior).
+for p in webExtension.requestedPermissions {
+    extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+}
+for m in webExtension.allRequestedMatchPatterns {
+    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+}
+```
+
+## Content scripts
+
+<ParamField path="content_scripts" type="array">
+  Scripts injected into web pages
+
+  ```json
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+  ```
+</ParamField>
+
+### Execution worlds
+
+<Note>
+  World isolation requires macOS 15.5+. Nook automatically patches manifests to add world support.
+</Note>
+
+<Accordion title="ISOLATED vs MAIN world">
+  - **ISOLATED** (default): Content scripts run in isolated JavaScript context with `browser.*` API access
+  - **MAIN**: Content scripts run in page context, can access page variables but lose `browser.*` APIs
+
+  ```swift
+  // ExtensionUtils.swift:20
+  static var isWorldInjectionSupported: Bool {
+      if #available(iOS 18.5, macOS 15.5, *) { return true }
+      return false
+  }
+  ```
+</Accordion>
+
+## Background scripts
+
+### Manifest V3 (service worker)
+
+```json
+"background": {
+  "service_worker": "background.js"
+}
+```
+
+### Manifest V2 (persistent page)
+
+```json
+"background": {
+  "scripts": ["background.js"],
+  "persistent": false
+}
+```
+
+<Warning>
+  MV3 extensions MUST include a service worker. Installation will fail if `background.service_worker` is missing.
+</Warning>
+
+## WebKit compatibility patches
+
+Nook automatically patches manifests during installation to ensure WebKit compatibility. This happens in `patchManifestForWebKit()`.
+
+### Automatic patches applied
+
+<Steps>
+  <Step title="Externally connectable bridge">
+    **Problem**: Pages calling `browser.runtime.sendMessage(SAFARI_EXT_ID, msg)` fail because Safari extension IDs don't match WKWebExtension IDs.
+
+    **Solution**: Nook injects a two-layer bridge when `externally_connectable` is present:
+
+    ```json
+    "externally_connectable": {
+      "matches": ["https://account.proton.me/*"]
+    }
+    ```
+
+    Nook automatically adds:
+    - **PAGE world script**: Intercepts `browser.runtime.sendMessage()` calls
+    - **ISOLATED world script** (`nook_bridge.js`): Relays messages via `window.postMessage()`
+
+    ```swift
+    // ExtensionManager.swift:186
+    private func setupExternallyConnectableBridge(
+        for extensionContext: WKWebExtensionContext,
+        extensionId: String,
+        packagePath: String
+    ) {
+        // Extract match patterns from externally_connectable
+        // Inject polyfill in PAGE world
+        // Inject bridge relay in ISOLATED world with browser.runtime access
+    }
+    ```
+  </Step>
+
+  <Step title="MV2 scripting permission">
+    **Problem**: MV2 extensions may use `chrome.scripting` API if available, but fail silently without the permission.
+
+    **Solution**: Auto-inject `"scripting"` permission for all MV2 extensions:
+
+    ```swift
+    // ExtensionManager.swift:1296
+    let manifestVersion = manifest["manifest_version"] as? Int ?? 3
+    if manifestVersion == 2 {
+        var permissions = manifest["permissions"] as? [String] ?? []
+        if !permissions.contains("scripting") {
+            permissions.append("scripting")
+            manifest["permissions"] = permissions
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Bitwarden iframe bridge">
+    **Problem**: Bitwarden's autofill iframe sends height updates via `parent.postMessage()`, but content scripts in ISOLATED world don't receive them.
+
+    **Solution**: Inject MAIN world script `nook_iframe_bridge.js` that forwards iframe messages:
+
+    ```javascript nook_iframe_bridge.js (auto-generated)
+    window.addEventListener('message', function(event) {
+        var data = event.data;
+        if (data.command === 'updateAutofillInlineMenuListHeight') {
+            var iframe = findBitwardenIframe();
+            if (iframe) {
+                iframe.style.height = data.styles.height;
+            }
+        }
+    });
+    ```
+
+    Applied automatically for extensions with `"Bitwarden"` in the name.
+  </Step>
+</Steps>
+
+## Externally connectable
+
+The `externally_connectable` field allows web pages to communicate with your extension:
+
+```json
+"externally_connectable": {
+  "matches": [
+    "https://account.proton.me/*",
+    "https://*.example.com/*"
+  ]
+}
+```
+
+### Bridge architecture
+
+Nook implements a sophisticated two-layer bridge:
+
+<Accordion title="How the bridge works">
+  1. **PAGE world polyfill** wraps `browser.runtime.sendMessage()` and `.connect()`
+  2. Calls are relayed via `window.postMessage()` to ISOLATED world
+  3. **ISOLATED world bridge** (`nook_bridge.js`) receives messages
+  4. Real `browser.runtime.sendMessage()` called with proper extension ID
+  5. Response forwarded back to PAGE world via `window.postMessage()`
+
+  The bridge is automatically injected as a content script when `externally_connectable` is detected.
+
+  ```swift
+  // ExtensionManager.swift:203
+  guard let ec = manifest["externally_connectable"] as? [String: Any],
+        let matchPatterns = ec["matches"] as? [String], !matchPatterns.isEmpty
+  else { return }
+
+  // Extract hostnames, inject PAGE world polyfill, write nook_bridge.js
+  ```
+</Accordion>
+
+## Localization
+
+Use `__MSG_key__` syntax to reference localized strings:
+
+```json manifest.json
+{
+  "name": "__MSG_extensionName__",
+  "description": "__MSG_extensionDescription__"
+}
+```
+
+```json _locales/en/messages.json
+{
+  "extensionName": {
+    "message": "My Extension"
+  },
+  "extensionDescription": {
+    "message": "Does something useful"
+  }
+}
+```
+
+Nook resolves locales during installation with fallback priority:
+1. User's current locale (e.g., `en_US`)
+2. Language code only (e.g., `en`)
+3. `default_locale` from manifest
+
+## Complete example
+
+```json manifest.json
+{
+  "manifest_version": 3,
+  "name": "GitHub Enhancer",
+  "version": "2.1.0",
+  "description": "Adds extra features to GitHub",
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon48.png"
+  },
+  
+  "background": {
+    "service_worker": "background.js"
+  },
+  
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  
+  "host_permissions": [
+    "https://github.com/*"
+  ],
+  
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="API reference" icon="code" href="/extensions/development/api-reference">
+    Explore available browser APIs
+  </Card>
+  <Card title="Debugging" icon="bug" href="/extensions/development/debugging">
+    Debug manifest issues and extension behavior
+  </Card>
+</CardGroup>

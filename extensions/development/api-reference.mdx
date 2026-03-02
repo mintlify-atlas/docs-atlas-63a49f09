@@ -1,0 +1,559 @@
+---
+title: API reference
+description: Available browser extension APIs and native messaging support
+---
+
+Nook exposes browser extension APIs through WebKit's native `WKWebExtension` framework. Extensions can use both `browser.*` (Firefox-style) and `chrome.*` (Chrome-style) namespaces.
+
+## Supported APIs
+
+Nook provides comprehensive API support through WKWebExtension. Available APIs are probed during background worker initialization.
+
+### Runtime detection
+
+Check API availability in your background script:
+
+```javascript background.js
+const apis = {
+  runtime: typeof browser.runtime !== 'undefined',
+  tabs: typeof browser.tabs !== 'undefined',
+  windows: typeof browser.windows !== 'undefined',
+  storage: typeof browser.storage !== 'undefined',
+  scripting: typeof browser.scripting !== 'undefined'
+};
+
+console.log('Available APIs:', apis);
+```
+
+<Note>
+  Nook automatically runs API capability probes at +3s and +8s after background load. Check Xcode console for `[EXT-HEALTH]` logs.
+</Note>
+
+```swift
+// ExtensionManager.swift:3476
+bgWV.evaluateJavaScript("""
+    (function() {
+        var b = typeof browser !== 'undefined' ? browser : chrome;
+        return JSON.stringify({
+            runtime: !!b.runtime,
+            tabs: !!b.tabs,
+            windows: !!b.windows,
+            storage: !!b.storage,
+            scripting: !!b.scripting,
+            webNavigation: !!b.webNavigation,
+            permissions: !!b.permissions,
+            action: !!b.action,
+            // ... full capability probe
+        });
+    })()
+""")
+```
+
+## browser.tabs
+
+Manage browser tabs through the `ExtensionTabAdapter` bridge.
+
+### Query tabs
+
+```javascript
+// Get all tabs
+const tabs = await browser.tabs.query({});
+
+// Get active tab in current window
+const [activeTab] = await browser.tabs.query({ 
+  active: true, 
+  currentWindow: true 
+});
+
+// Get tabs by URL pattern
+const githubTabs = await browser.tabs.query({ 
+  url: 'https://github.com/*' 
+});
+```
+
+### Tab properties
+
+The `ExtensionTabAdapter` exposes these properties from Nook's `Tab` model:
+
+<ParamField path="id" type="number">
+  Unique tab identifier (stable across adapter lookups)
+</ParamField>
+
+<ParamField path="url" type="string">
+  Current tab URL (`tab.url` from Nook)
+</ParamField>
+
+<ParamField path="title" type="string">
+  Page title (`tab.name` from Nook)
+</ParamField>
+
+<ParamField path="active" type="boolean">
+  Whether tab is currently selected
+</ParamField>
+
+<ParamField path="pinned" type="boolean">
+  Whether tab is pinned (`tabManager.pinnedTabs.contains`)
+</ParamField>
+
+<ParamField path="muted" type="boolean">
+  Audio mute state (`tab.isAudioMuted`)
+</ParamField>
+
+<ParamField path="audible" type="boolean">
+  Whether tab is playing audio (`tab.hasPlayingAudio`)
+</ParamField>
+
+```swift
+// Nook/Managers/ExtensionManager/ExtensionBridge.swift:153
+final class ExtensionTabAdapter: NSObject, WKWebExtensionTab {
+    internal let tab: Tab
+    
+    func url(for extensionContext: WKWebExtensionContext) -> URL? {
+        return tab.url
+    }
+    
+    func title(for extensionContext: WKWebExtensionContext) -> String? {
+        return tab.name
+    }
+    
+    func isSelected(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.currentTabForActiveWindow()?.id == tab.id
+    }
+    
+    func isPinned(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.tabManager.pinnedTabs.contains(where: { $0.id == tab.id })
+    }
+    
+    func isMuted(for extensionContext: WKWebExtensionContext) -> Bool {
+        return tab.isAudioMuted
+    }
+}
+```
+
+### Tab actions
+
+```javascript
+// Activate tab
+await browser.tabs.update(tabId, { active: true });
+
+// Close tab
+await browser.tabs.remove(tabId);
+
+// Reload tab
+await browser.tabs.reload(tabId);
+
+// Reload from origin (bypass cache)
+await browser.tabs.reload(tabId, { bypassCache: true });
+
+// Navigate to URL
+await browser.tabs.update(tabId, { url: 'https://example.com' });
+
+// Mute/unmute audio
+await browser.tabs.update(tabId, { muted: true });
+
+// Zoom control
+await browser.tabs.setZoom(tabId, 1.5);
+const zoom = await browser.tabs.getZoom(tabId);
+```
+
+### Create tabs
+
+```javascript
+// Create new tab
+const newTab = await browser.tabs.create({
+  url: 'https://example.com',
+  active: true
+});
+```
+
+## browser.windows
+
+Access window state through the `ExtensionWindowAdapter` bridge.
+
+### Window properties
+
+```javascript
+// Get current window
+const window = await browser.windows.getCurrent();
+
+// Window properties
+console.log({
+  id: window.id,
+  focused: window.focused,
+  type: window.type,        // 'normal', 'popup', etc.
+  state: window.state,      // 'normal', 'minimized', 'maximized', 'fullscreen'
+  incognito: window.incognito
+});
+```
+
+```swift
+// Nook/Managers/ExtensionManager/ExtensionBridge.swift:14
+final class ExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
+    func windowType(for extensionContext: WKWebExtensionContext) -> WKWebExtension.WindowType {
+        return .normal
+    }
+    
+    func windowState(for extensionContext: WKWebExtensionContext) -> WKWebExtension.WindowState {
+        guard let window = NSApp.mainWindow else { return .normal }
+        if window.isMiniaturized { return .minimized }
+        if window.styleMask.contains(.fullScreen) { return .fullscreen }
+        return .normal
+    }
+    
+    func isPrivate(for extensionContext: WKWebExtensionContext) -> Bool {
+        return browserManager.currentTabForActiveWindow()?.isEphemeral ?? false
+    }
+}
+```
+
+### Window actions
+
+```javascript
+// Focus window
+await browser.windows.update(windowId, { focused: true });
+
+// Minimize/maximize
+await browser.windows.update(windowId, { state: 'minimized' });
+await browser.windows.update(windowId, { state: 'maximized' });
+await browser.windows.update(windowId, { state: 'fullscreen' });
+
+// Resize/reposition
+await browser.windows.update(windowId, {
+  left: 100,
+  top: 100,
+  width: 800,
+  height: 600
+});
+
+// Close window
+await browser.windows.remove(windowId);
+```
+
+## browser.runtime
+
+Core runtime APIs for extension lifecycle and messaging.
+
+### Extension info
+
+```javascript
+// Extension ID (unique per installation)
+const id = browser.runtime.id;
+
+// Get extension resource URL
+const iconUrl = browser.runtime.getURL('icons/icon48.png');
+
+// Extension manifest
+const manifest = browser.runtime.getManifest();
+console.log(manifest.name, manifest.version);
+```
+
+### Messaging
+
+<Accordion title="Content script to background">
+  ```javascript content.js
+  // Send one-time message
+  const response = await browser.runtime.sendMessage({
+    action: 'getData',
+    id: 123
+  });
+
+  // Long-lived connection
+  const port = browser.runtime.connect({ name: 'content-port' });
+  port.onMessage.addListener((msg) => {
+    console.log('Received:', msg);
+  });
+  port.postMessage({ type: 'init' });
+  ```
+
+  ```javascript background.js
+  // Receive messages
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'getData') {
+      sendResponse({ data: 'result' });
+    }
+  });
+
+  // Handle connections
+  browser.runtime.onConnect.addListener((port) => {
+    port.onMessage.addListener((msg) => {
+      port.postMessage({ response: 'ack' });
+    });
+  });
+  ```
+</Accordion>
+
+<Accordion title="External messaging (web pages)">
+  Web pages can message extensions if listed in `externally_connectable`:
+
+  ```json manifest.json
+  {
+    "externally_connectable": {
+      "matches": ["https://example.com/*"]
+    }
+  }
+  ```
+
+  ```javascript webpage.js (on example.com)
+  // Page sends message to extension
+  const response = await browser.runtime.sendMessage(
+    EXTENSION_ID,
+    { action: 'getData' }
+  );
+  ```
+
+  Nook automatically injects the externally connectable bridge to handle ID mismatches between Safari and WKWebExtension.
+</Accordion>
+
+### Lifecycle events
+
+```javascript background.js
+// Extension installed or updated
+browser.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    console.log('First install');
+  } else if (details.reason === 'update') {
+    console.log('Updated from', details.previousVersion);
+  }
+});
+
+// Extension starting up
+browser.runtime.onStartup.addListener(() => {
+  console.log('Browser started, extension loaded');
+});
+```
+
+## browser.storage
+
+Persistent storage APIs with profile isolation.
+
+<Warning>
+  Storage is **isolated per profile** in Nook. Each profile has its own `WKWebsiteDataStore`. Switching profiles changes the extension's storage context.
+</Warning>
+
+```swift
+// ExtensionManager.swift:49
+// Profile-aware extension storage
+private var profileExtensionStores: [UUID: WKWebsiteDataStore] = [:]
+var currentProfileId: UUID?
+
+private func getExtensionDataStore(for profileId: UUID) -> WKWebsiteDataStore {
+    if let store = profileExtensionStores[profileId] { return store }
+    let store = WKWebsiteDataStore(forIdentifier: profileId)
+    profileExtensionStores[profileId] = store
+    return store
+}
+```
+
+### Storage areas
+
+<CodeGroup>
+```javascript Local storage
+// Store data locally (persists across sessions)
+await browser.storage.local.set({ 
+  key: 'value',
+  settings: { theme: 'dark' }
+});
+
+const data = await browser.storage.local.get('key');
+const all = await browser.storage.local.get(null); // Get all
+
+await browser.storage.local.remove('key');
+await browser.storage.local.clear();
+```
+
+```javascript Session storage
+// Temporary storage (cleared when browser closes)
+await browser.storage.session.set({ tempData: '...' });
+const data = await browser.storage.session.get('tempData');
+```
+
+```javascript Sync storage
+// Cloud-synced storage (if supported by browser)
+await browser.storage.sync.set({ syncedKey: 'value' });
+```
+</CodeGroup>
+
+### Storage events
+
+```javascript
+// Listen for storage changes
+browser.storage.onChanged.addListener((changes, areaName) => {
+  for (const [key, { oldValue, newValue }] of Object.entries(changes)) {
+    console.log(`${key} in ${areaName}: ${oldValue} → ${newValue}`);
+  }
+});
+```
+
+## browser.scripting
+
+Dynamic content script injection (requires `"scripting"` permission).
+
+<Note>
+  MV2 extensions automatically get `"scripting"` permission injected by Nook to support modern script injection.
+</Note>
+
+```javascript
+// Execute script in tab
+const results = await browser.scripting.executeScript({
+  target: { tabId: tab.id },
+  func: () => document.title,
+  world: 'ISOLATED' // or 'MAIN'
+});
+
+console.log('Page title:', results[0].result);
+
+// Inject CSS
+await browser.scripting.insertCSS({
+  target: { tabId: tab.id },
+  css: 'body { background: red; }'
+});
+
+// Remove CSS
+await browser.scripting.removeCSS({
+  target: { tabId: tab.id },
+  css: 'body { background: red; }'
+});
+```
+
+## Other APIs
+
+Nook supports additional WebExtension APIs through WKWebExtension:
+
+<CardGroup cols={2}>
+  <Card title="browser.alarms" icon="clock">
+    Schedule recurring tasks
+  </Card>
+  <Card title="browser.permissions" icon="shield-check">
+    Runtime permission requests
+  </Card>
+  <Card title="browser.webNavigation" icon="compass">
+    Monitor navigation events
+  </Card>
+  <Card title="browser.webRequest" icon="globe">
+    Intercept network requests
+  </Card>
+  <Card title="browser.declarativeNetRequest" icon="filter">
+    Block/modify requests declaratively
+  </Card>
+  <Card title="browser.contextMenus" icon="bars">
+    Add context menu items
+  </Card>
+  <Card title="browser.commands" icon="keyboard">
+    Keyboard shortcuts
+  </Card>
+  <Card title="browser.i18n" icon="language">
+    Localization utilities
+  </Card>
+  <Card title="browser.notifications" icon="bell">
+    System notifications
+  </Card>
+</CardGroup>
+
+## Native messaging
+
+Extensions can communicate with native macOS applications using the native messaging protocol.
+
+### Host manifest locations
+
+Nook searches for native messaging host manifests in this order:
+
+1. `~/Library/Application Support/Nook/NativeMessagingHosts/`
+2. Chrome: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`
+3. Chromium: `~/Library/Application Support/Chromium/NativeMessagingHosts/`
+4. Edge: `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/`
+5. Brave: `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/`
+6. Firefox: `~/Library/Application Support/Mozilla/NativeMessagingHosts/`
+
+### Host manifest format
+
+```json com.example.myapp.json
+{
+  "name": "com.example.myapp",
+  "description": "My native app",
+  "path": "/Applications/MyApp.app/Contents/MacOS/native-host",
+  "type": "stdio",
+  "allowed_extensions": ["extension-id-here"]
+}
+```
+
+Place this file in `~/Library/Application Support/Nook/NativeMessagingHosts/com.example.myapp.json`.
+
+### Protocol
+
+Native messaging uses a **4-byte native-endian length prefix + JSON** format:
+
+```javascript extension background.js
+// One-time message (5s timeout)
+const response = await browser.runtime.sendNativeMessage(
+  'com.example.myapp',
+  { command: 'getData' }
+);
+
+// Long-lived connection
+const port = browser.runtime.connectNative('com.example.myapp');
+port.onMessage.addListener((msg) => {
+  console.log('From native:', msg);
+});
+port.postMessage({ command: 'start' });
+```
+
+```swift Native host (Swift example)
+import Foundation
+
+func readMessage() -> [String: Any]? {
+    var lengthBytes = [UInt8](repeating: 0, count: 4)
+    let lengthRead = fread(&lengthBytes, 1, 4, stdin)
+    guard lengthRead == 4 else { return nil }
+    
+    let length = lengthBytes.withUnsafeBytes { $0.load(as: UInt32.self) }
+    var messageBytes = [UInt8](repeating: 0, count: Int(length))
+    let messageRead = fread(&messageBytes, 1, Int(length), stdin)
+    guard messageRead == length else { return nil }
+    
+    let data = Data(messageBytes)
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+func sendMessage(_ message: [String: Any]) {
+    let data = try! JSONSerialization.data(withJSONObject: message)
+    var length = UInt32(data.count)
+    fwrite(&length, 4, 1, stdout)
+    data.withUnsafeBytes { fwrite($0.baseAddress, 1, data.count, stdout) }
+    fflush(stdout)
+}
+
+// Main loop
+while let message = readMessage() {
+    sendMessage(["response": "ok", "data": 123])
+}
+```
+
+## API compatibility notes
+
+<Warning>
+  **WebView requirement**: Extensions can only interact with tabs that have loaded webviews. `ExtensionTabAdapter` uses `tab.assignedWebView` (doesn't trigger lazy initialization).
+</Warning>
+
+```swift
+// ExtensionBridge.swift:213
+func webView(for extensionContext: WKWebExtensionContext) -> WKWebView? {
+    // Use assignedWebView to avoid triggering lazy initialization
+    // Extensions can only interact with tabs that are currently displayed
+    return tab.assignedWebView
+}
+```
+
+<Note>
+  Reader mode is not supported: `isReaderModeActive()` always returns `false`.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Manifest reference" icon="file-code" href="/extensions/development/manifest">
+    Declare permissions for these APIs
+  </Card>
+  <Card title="Debugging" icon="bug" href="/extensions/development/debugging">
+    Debug API calls and messaging issues
+  </Card>
+</CardGroup>

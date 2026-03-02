@@ -1,0 +1,206 @@
+---
+title: Tabs and spaces
+description: Organize your browsing with spaces, folders, and flexible tab management
+---
+
+Nook uses **Spaces** to organize your tabs into contextual workspaces. Each space can contain regular tabs, space-pinned tabs, and folders for additional organization.
+
+## Spaces
+
+Spaces are containers for related tabs. Think of them as separate browsing contexts:
+
+- **Work** - Keep all work-related tabs together
+- **Personal** - Separate personal browsing from work
+- **Research** - Organize research tabs by project
+- **Shopping** - Compare products across multiple tabs
+
+### Creating a space
+
+<Steps>
+  <Step title="Click the new space button">
+    Click the **+** button at the bottom right of the sidebar, or use the keyboard shortcut `Cmd+Shift+N`.
+  </Step>
+  
+  <Step title="Enter space details">
+    - **Name** - Give your space a descriptive name
+    - **Icon** - Choose an emoji or SF Symbol icon
+    - **Profile** (optional) - Assign the space to a specific profile
+  </Step>
+  
+  <Step title="Create the space">
+    Click **Create** to add your new space.
+  </Step>
+</Steps>
+
+<Tip>
+Spaces remember the active tab, so switching back to a space returns you to where you left off.
+</Tip>
+
+### Switching spaces
+
+Navigate between spaces using:
+
+- **Swipe gestures** - Swipe left or right on the sidebar tab list
+- **Space indicators** - Click the dots at the bottom of the sidebar
+- **Command palette** - Type the space name and press Enter
+
+<Note>
+Each space maintains its own active tab. Switching spaces automatically activates the last tab you were viewing in that space.
+</Note>
+
+### Editing a space
+
+Right-click any space indicator or use the space context menu to:
+
+- **Rename** - Change the space name
+- **Change icon** - Update the space icon
+- **Assign profile** - Move the space to a different profile
+- **Customize gradient** - Edit the space's background gradient
+- **Delete space** - Remove the space (tabs are preserved)
+
+## Tabs
+
+Tabs in Nook exist within spaces and can be organized in multiple ways.
+
+### Creating tabs
+
+Create new tabs in the current space:
+
+- Press `Cmd+T` to open the command palette
+- Type a URL or search query
+- Press Enter to create the tab
+
+Alternatively:
+
+- Right-click the sidebar → **New Tab**
+- Use the File menu → **New Tab**
+
+### Tab states
+
+Tabs can be in different states:
+
+- **Regular** - Normal tab in a space
+- **Space-pinned** - Pinned to the top of a specific space
+- **Global-pinned** - Pinned across all spaces (Essentials)
+- **Folder member** - Organized inside a folder
+
+### Moving tabs between spaces
+
+Drag a tab from the sidebar and drop it onto a different space indicator to move it. The tab will be removed from the source space and added to the destination space.
+
+<Card title="Tab persistence" icon="floppy-disk">
+  All tabs are automatically saved to disk. Nook uses atomic snapshots to ensure your tabs are never lost, even if the browser crashes.
+</Card>
+
+## Pinning tabs
+
+Nook supports two types of pinned tabs:
+
+### Global pinning (Essentials)
+
+Pinned tabs appear in the Essentials grid at the top of every space:
+
+1. Right-click a tab
+2. Select **Pin Tab**
+3. The tab moves to the Essentials grid
+
+**Characteristics:**
+- Available in all spaces
+- Profile-specific (each profile has its own essentials)
+- Hidden in incognito mode
+- Grid layout for compact display
+
+### Space pinning
+
+Pin a tab to the top of a specific space:
+
+1. Right-click a tab within a space
+2. Select **Pin to Space**
+3. The tab moves to the space-pinned section
+
+**Characteristics:**
+- Only visible in that space
+- Appears above regular tabs
+- Can be organized into folders
+- Preserved when switching profiles
+
+<Tip>
+Use global pinning for apps you always need (like email or calendar) and space pinning for tabs important to a specific context.
+</Tip>
+
+## Folders
+
+Organize space-pinned tabs into folders for better structure.
+
+### Creating folders
+
+<Steps>
+  <Step title="Open the space context menu">
+    Right-click anywhere in the space's tab list.
+  </Step>
+  
+  <Step title="Create folder">
+    Select **New Folder** from the menu.
+  </Step>
+  
+  <Step title="Name your folder">
+    Enter a name for the folder (e.g., "Documentation", "Social Media").
+  </Step>
+</Steps>
+
+### Adding tabs to folders
+
+Drag a space-pinned tab onto a folder to add it. The tab becomes a member of that folder and is hidden when the folder is collapsed.
+
+### Folder states
+
+- **Open** - Shows all tabs inside the folder
+- **Closed** - Hides tabs inside (shows count badge)
+
+Click the folder to toggle between open and closed states.
+
+<Note>
+Folders can only contain space-pinned tabs. Regular tabs cannot be added to folders directly - pin them to the space first.
+</Note>
+
+## Tab reordering
+
+Reorder tabs within a space:
+
+1. Click and drag a tab
+2. Drop it at the desired position
+
+Tabs can be reordered:
+
+- Within regular tabs
+- Within space-pinned tabs
+- Between folders (for space-pinned tabs)
+
+<Card title="Keyboard shortcuts" icon="keyboard">
+  - `Cmd+T` - New tab (opens command palette)
+  - `Cmd+W` - Close current tab
+  - `Cmd+Shift+N` - New space
+  - `Cmd+P` - Pin/unpin current tab
+  - `Cmd+[` / `Cmd+]` - Navigate to previous/next tab
+</Card>
+
+## Tab lifecycle
+
+Nook optimizes memory by lazy-loading tabs:
+
+- Tabs are created without loading the webview initially
+- Webviews are loaded when you first view the tab
+- Inactive tabs can be unloaded to save memory
+- Navigation state is preserved even when unloaded
+
+This approach allows you to keep hundreds of tabs open without consuming excessive memory.
+
+## Multi-window support
+
+The same tab can be viewed in multiple windows:
+
+- Each window shows an independent webview for the tab
+- Changes sync across all windows (URL navigation, title updates)
+- Closing a window doesn't close the tab (unless it's the last window)
+
+This enables flexible multi-window workflows while maintaining a single source of truth for tab data.

@@ -1,0 +1,166 @@
+---
+title: Installation
+description: Download Nook or build it from source
+---
+
+## Download the latest release
+
+The easiest way to install Nook is to download the pre-built DMG from GitHub Releases.
+
+<Steps>
+  <Step title="Download the DMG">
+    Download the latest version from the [GitHub Releases page](https://github.com/nook-browser/nook/releases/latest).
+
+    Current version: **v1.0.2**
+
+    <CodeGroup>
+    ```bash Direct download
+    curl -L -o Nook.dmg https://github.com/nook-browser/nook/releases/download/v1.0.2/Nook-v1.0.2.dmg
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Open the DMG">
+    Double-click the downloaded `Nook-v1.0.2.dmg` file to mount it.
+  </Step>
+
+  <Step title="Drag to Applications">
+    Drag the Nook app icon to your Applications folder.
+  </Step>
+
+  <Step title="Launch Nook">
+    Open Nook from your Applications folder. You may need to right-click and select **Open** the first time to bypass Gatekeeper.
+
+    <Note>
+    If macOS blocks the app, go to **System Settings > Privacy & Security** and click **Open Anyway**.
+    </Note>
+  </Step>
+</Steps>
+
+## Build from source
+
+If you want to contribute to Nook or customize the build, you can compile it from source.
+
+### Prerequisites
+
+Before building Nook, ensure you have:
+
+- **macOS 15.5+** (Sequoia or later)
+- **Xcode** (latest version recommended)
+- **Git** for cloning the repository
+
+<Warning>
+Some Objective-C libraries may have compatibility issues on Intel Macs. For older macOS versions (pre-Sequoia), you may need to remove specific API calls.
+</Warning>
+
+### Clone the repository
+
+<Steps>
+  <Step title="Clone from GitHub">
+    Clone the Nook repository and navigate to the project directory:
+
+    ```bash
+    git clone https://github.com/nook-browser/Nook.git
+    cd Nook
+    ```
+  </Step>
+
+  <Step title="Open in Xcode">
+    Open the Xcode project:
+
+    ```bash
+    open Nook.xcodeproj
+    ```
+  </Step>
+
+  <Step title="Configure signing">
+    In Xcode, go to the **Signing & Capabilities** tab and set your personal **Development Team**. This is required to build locally.
+
+    <Note>
+    You'll need an Apple Developer account (free or paid) to sign the app for local development.
+    </Note>
+  </Step>
+
+  <Step title="Build the project">
+    Select the **Nook** scheme and build the project:
+
+    - **Product > Build** (⌘B)
+    - Or click the **Play** button to build and run
+
+    <CodeGroup>
+    ```bash Command line (Debug)
+    xcodebuild -scheme Nook -configuration Debug -arch arm64 -derivedDataPath build
+    ```
+
+    ```bash Command line (Release)
+    xcodebuild -scheme Nook -configuration Release -arch arm64 -arch x86_64 -derivedDataPath build
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Run Nook">
+    After building, run the app from Xcode or locate the compiled binary in the build output directory.
+  </Step>
+</Steps>
+
+### Dependencies
+
+Nook embeds all dependencies locally in `Nook/ThirdParty/`. No Swift Package Manager setup is required.
+
+Included libraries:
+- **BigUIPaging** - Page view components
+- **HTSymbolHook** - Symbol hooking utilities
+- **MuteableWKWebView** - Custom WebKit extensions
+- **swift-atomics** - Atomic operations
+- **swift-numerics** - Numeric utilities
+
+### Development branch
+
+The `main` branch contains stable releases. For the latest features and development work, check out the `dev` branch:
+
+```bash
+git checkout dev
+```
+
+<Warning>
+All pull requests must target the `dev` branch, not `main`. CI will enforce this.
+</Warning>
+
+## Verify installation
+
+After installing Nook, verify it's working correctly:
+
+1. Launch Nook from Applications
+2. You should see the onboarding flow on first launch
+3. Complete the setup wizard to configure initial preferences
+4. Start browsing!
+
+## Troubleshooting
+
+### "Nook" is damaged and can't be opened
+
+This typically happens when the app is quarantined by Gatekeeper. To fix:
+
+```bash
+xattr -cr /Applications/Nook.app
+```
+
+### Build errors on Intel Macs
+
+Some Objective-C libraries may have compatibility issues on Intel architecture. Consult the [GitHub Issues](https://github.com/nook-browser/Nook/issues) or [Discord community](https://discord.gg/J3XfPvg7Fs) for architecture-specific workarounds.
+
+### Xcode signing errors
+
+Ensure you've selected a valid **Development Team** in the Signing & Capabilities tab. If you don't have a team, create a free Apple Developer account at [developer.apple.com](https://developer.apple.com).
+
+## Next steps
+
+Now that Nook is installed, learn how to get started with the quickstart guide.
+
+<Card
+  title="Quickstart guide"
+  icon="bolt"
+  href="/quickstart"
+>
+  Configure Nook and start your first browsing session
+</Card>
